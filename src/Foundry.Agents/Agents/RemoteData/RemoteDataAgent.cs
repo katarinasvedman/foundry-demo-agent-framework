@@ -54,6 +54,26 @@ namespace Foundry.Agents.Agents.RemoteData
                 // If adapter wasn't provided via DI (tests), construct the real adapter using config/DefaultAzureCredential.
                 IPersistentAgentsClientAdapter adapter = _agentsAdapter ?? new Foundry.Agents.Agents.Shared.RealPersistentAgentsClientAdapter(endpoint, _configuration, null);
 
+                // Check for a locally persisted agent id and reuse it if present and valid
+                var persistedAgentId = await AgentFileHelpers.ReadPersistedAgentIdAsync(_configuration, "RemoteData", _logger);
+                if (!string.IsNullOrEmpty(persistedAgentId))
+                {
+                    _logger.LogInformation("Found persisted agent id {AgentId} for RemoteData; verifying", persistedAgentId);
+                    try
+                    {
+                        if (await adapter.AgentExistsAsync(persistedAgentId))
+                        {
+                            _logger.LogInformation("Persisted agent {AgentId} exists. Reusing.", persistedAgentId);
+                            return;
+                        }
+                        _logger.LogWarning("Persisted agent id {AgentId} not found on server; will create a new agent.", persistedAgentId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error while verifying persisted agent id {AgentId}; will attempt creation.", persistedAgentId);
+                    }
+                }
+
                 // If an agent id is provided, check existence.
                 var providedAgentId = Environment.GetEnvironmentVariable("PROJECT_AGENT_ID") ?? _configuration["Project:AgentId"];
                 if (!string.IsNullOrEmpty(providedAgentId))
@@ -64,8 +84,8 @@ namespace Foundry.Agents.Agents.RemoteData
                         _logger.LogInformation("Agent {AgentId} exists.", providedAgentId);
                         await AgentFileHelpers.PersistAgentIdAsync(providedAgentId, _configuration, _logger, "RemoteData");
                         // After ensuring the agent exists, run a single prompt to demonstrate functionality and log the response.
-                        var demoPrompt = "Fetch today's SE3 price and Stockholm hourly temperature. Return the JSON envelope only";
-                        await RunAgentAsync(endpoint, providedAgentId, demoPrompt, cancellationToken);
+                        /*var demoPrompt = "Fetch SE3 price and Stockholm hourly temperature for YYYY-MM-DD. Return the JSON envelope only";
+                        await RunAgentAsync(endpoint, providedAgentId, demoPrompt, cancellationToken);*/
                         return;
                     }
                     _logger.LogWarning("Provided agent id {AgentId} not found; will create a new agent.", providedAgentId);
@@ -75,7 +95,7 @@ namespace Foundry.Agents.Agents.RemoteData
                 var instructions =
                     "You must return only JSON (no extra text) with:\n{\n  \"agent\":\"RemoteData\", \"thread_id\":\"<string>\", \"task_id\":\"<string>\", \"status\":\"<ok|needs_input|error>\", \"summary\":\"<1-3 sentences; no chain-of-thought>\", \"data\":{}, \"next_actions\":[], \"citations\":[]\n}\n" +
                     "ROLE: Acquire real 24h SE3 price + Stockholm weather by invoking the OpenAPI tool 'external_signals' (DayAheadPrice, WeatherHourly).\n" +
-                    "WORKFLOW: Call DayAheadPrice(zone=SE3,date=today) then WeatherHourly(city=Stockholm,date=today). Validate each response has exactly 24 numeric values; retry a failing operation once. Produce only the final JSON envelope (no prose or code fences).\n" +
+                    "WORKFLOW: Call DayAheadPrice(zone=SE3,date=YYYY-MM-DD) then WeatherHourly(city=Stockholm,date=YYYY-MM-DD). Use ISO date format 'yyyy-MM-dd' and do NOT pass human words like 'today' or 'tomorrow' as the date parameter. Validate each response has exactly 24 numeric values; retry a failing operation once. Produce only the final JSON envelope (no prose or code fences).\n" +
                     "RULES: Never fabricate values; if both calls fail return status=error and empty data; if one succeeds include only that dataset; thread_id must match context; no chain-of-thought.\n" +
                     "DIAGNOSTICS: On error include diagnostics {refusal_reason_code, refusal_reason_raw, attempted_operations, must_call_tools_before_refusal}.\n" +
                     "OUTPUT: Emit only JSON with fields: agent, thread_id, task_id(\"remote-phase-1\"), status, summary, data (day_ahead_price_sek_per_kwh, temperature_c, source:'function'), next_actions, citations.";
@@ -86,8 +106,8 @@ namespace Foundry.Agents.Agents.RemoteData
                     _logger.LogInformation("Created agent with id {AgentId}", newAgentId);
                     await AgentFileHelpers.PersistAgentIdAsync(newAgentId, _configuration, _logger, "RemoteData");
                     // Run demo prompt against the newly created agent and log its response
-                    var demoPrompt = "Fetch today's SE3 price and Stockholm hourly temperature. Return the JSON envelope only";
-                    await RunAgentAsync(endpoint, newAgentId, demoPrompt, cancellationToken);
+                    /*var demoPrompt = "Fetch SE3 price and Stockholm hourly temperature for YYYY-MM-DD. Return the JSON envelope only";
+                    await RunAgentAsync(endpoint, newAgentId, demoPrompt, cancellationToken);*/
                 }
                 else
                 {
@@ -135,6 +155,8 @@ namespace Foundry.Agents.Agents.RemoteData
                     {
                         normalizedPrompt = normalizedPrompt.Replace("today's", todayIso, StringComparison.OrdinalIgnoreCase);
                         normalizedPrompt = normalizedPrompt.Replace("today", todayIso, StringComparison.OrdinalIgnoreCase);
+                        // Also replace placeholder tokens like 'YYYY-MM-DD' which may appear in demo prompts or instructions
+                        normalizedPrompt = normalizedPrompt.Replace("YYYY-MM-DD", todayIso, StringComparison.OrdinalIgnoreCase);
                     }
                     catch
                     {

@@ -62,7 +62,22 @@ public static class SignalsFunctions
         string dateStr = query["date"];
         var tz = TZConvert.GetTimeZoneInfo("Europe/Stockholm");
         var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
-        var date = string.IsNullOrWhiteSpace(dateStr) ? nowLocal.Date : DateTime.Parse(dateStr);
+        DateTime date;
+        if (string.IsNullOrWhiteSpace(dateStr))
+        {
+            date = nowLocal.Date;
+        }
+        else
+        {
+            Console.WriteLine($"[Func][{cid}] DayAheadPrice received raw date='{dateStr}'");
+            if (!DateTime.TryParseExact(dateStr, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out date))
+            {
+                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+                bad.Headers.Add("Content-Type", "application/json");
+                bad.WriteString(JsonSerializer.Serialize(new { error = "Invalid date format. Use yyyy-MM-dd.", received = dateStr }));
+                return bad;
+            }
+        }
         if (!string.Equals(zone, "SE3", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine($"[Func][{cid}] DayAheadPrice invalid zone={zone}");
@@ -89,7 +104,22 @@ public static class SignalsFunctions
         string dateStr = query["date"];
         var tz = TZConvert.GetTimeZoneInfo("Europe/Stockholm");
         var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
-        var date = string.IsNullOrWhiteSpace(dateStr) ? nowLocal.Date : DateTime.Parse(dateStr);
+        DateTime date;
+        if (string.IsNullOrWhiteSpace(dateStr))
+        {
+            date = nowLocal.Date;
+        }
+        else
+        {
+            Console.WriteLine($"[Func][{cid}] WeatherHourly received raw date='{dateStr}'");
+            if (!DateTime.TryParseExact(dateStr, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out date))
+            {
+                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+                bad.Headers.Add("Content-Type", "application/json");
+                bad.WriteString(JsonSerializer.Serialize(new { error = "Invalid date format. Use yyyy-MM-dd.", received = dateStr }));
+                return bad;
+            }
+        }
         if (!string.Equals(city, "Stockholm", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine($"[Func][{cid}] WeatherHourly invalid city={city}");
