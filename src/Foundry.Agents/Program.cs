@@ -74,7 +74,15 @@ var builder = Host.CreateDefaultBuilder(args)
 
         // register the real adapter using the PROJECT_ENDPOINT from config
         var endpoint = context.Configuration["Project:Endpoint"] ?? throw new InvalidOperationException("Configuration 'Project:Endpoint' is required");
-        services.AddSingleton<IPersistentAgentsClientAdapter>(sp => new RealPersistentAgentsClientAdapter(endpoint, sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<RealPersistentAgentsClientAdapter>>()));
+        if (endpoint.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase) || endpoint.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase))
+        {
+            // use local mock adapter for development to avoid Azure SDK requiring HTTPS for bearer tokens
+            services.AddSingleton<IPersistentAgentsClientAdapter>(sp => new LocalPersistentAgentsClientAdapter(endpoint, sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<LocalPersistentAgentsClientAdapter>>()));
+        }
+        else
+        {
+            services.AddSingleton<IPersistentAgentsClientAdapter>(sp => new RealPersistentAgentsClientAdapter(endpoint, sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<RealPersistentAgentsClientAdapter>>()));
+        }
 
         services.AddHostedService<HostedAgentRunner>();
     });

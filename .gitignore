@@ -66,4 +66,8 @@ TestResults/
 # Ignore user-specific files
 *.log
 
+# Ignore generated plot images and auto-saved agent outputs
+**/docs/*.png
+**/docs/last_agent_output.json
+
 # End of file

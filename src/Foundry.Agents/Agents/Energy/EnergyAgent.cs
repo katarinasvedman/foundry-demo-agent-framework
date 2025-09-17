@@ -10,6 +10,8 @@ using Azure.AI.Agents.Persistent;
 using Azure.Identity;
 using System.Linq;
 using Azure;
+using System.Text.Json;
+using System.Diagnostics;
 
 namespace Foundry.Agents.Agents.Energy
 {
@@ -305,6 +307,62 @@ namespace Foundry.Agents.Agents.Energy
                                 {
                                     remoteDataObserved = true;
                                     _logger.LogInformation("Detected RemoteData activity in thread {ThreadId}: message contains RemoteData envelope or OpenAPI calls.", threadId);
+                                }
+
+                                // Detect and save Energy GlobalEnvelope JSON to docs/last_agent_output.json
+                                if (txt.Contains("\"agent\": \"Energy\"") || txt.Contains("\"agent\":\"Energy\""))
+                                {
+                                    try
+                                    {
+                                        var doc = JsonDocument.Parse(txt);
+                                        var formatted = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+                                        var outDir = System.IO.Path.Combine("docs");
+                                        System.IO.Directory.CreateDirectory(outDir);
+                                        var outPath = System.IO.Path.Combine(outDir, "last_agent_output.json");
+                                        System.IO.File.WriteAllText(outPath, formatted);
+                                        _logger.LogInformation("Saved Energy GlobalEnvelope to {Path}", outPath);
+
+                                        // Run the plotting script automatically, pass the saved JSON path
+                                        try
+                                        {
+                                            var cwd = System.IO.Directory.GetCurrentDirectory();
+                                            var scriptPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(cwd, "..", "..", "docs", "energy_measures_plot.py"));
+                                            var jsonPath = System.IO.Path.GetFullPath(outPath);
+
+                                            var psi = new ProcessStartInfo
+                                            {
+                                                FileName = "python",
+                                                Arguments = $"\"{scriptPath}\" \"{jsonPath}\"",
+                                                RedirectStandardOutput = true,
+                                                RedirectStandardError = true,
+                                                UseShellExecute = false,
+                                                CreateNoWindow = true
+                                            };
+
+                                            using var proc = Process.Start(psi);
+                                            if (proc != null)
+                                            {
+                                                var stdout = proc.StandardOutput.ReadToEnd();
+                                                var stderr = proc.StandardError.ReadToEnd();
+                                                proc.WaitForExit(60000); // wait up to 60s
+                                                _logger.LogInformation("Plot script stdout: {Stdout}", stdout);
+                                                if (!string.IsNullOrWhiteSpace(stderr)) _logger.LogWarning("Plot script stderr: {Stderr}", stderr);
+                                            }
+                                            else
+                                            {
+                                                _logger.LogWarning("Failed to start plot script process (Process.Start returned null)");
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            _logger.LogWarning(ex, "Failed to run plot script");
+                                        }
+
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogWarning(ex, "Failed to parse or save Energy agent JSON output");
+                                    }
                                 }
                             }
                             else if (contentItem is MessageImageFileContent imageFileItem)
