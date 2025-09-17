@@ -423,9 +423,15 @@ namespace Foundry.Agents.Agents.Energy
                 _logger.LogInformation("Saved Energy GlobalEnvelope (pretty JSON) to {Path}", outPath);
 
                 // Run the plotting script and capture output for demo exposition
-                var repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "..", ".."));
-                var scriptPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(repoRoot, "docs", "energy_measures_plot.py"));
+                // Resolve script path relative to the current working directory (robust in dev & CI)
+                var scriptPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "docs", "energy_measures_plot.py"));
                 var jsonPath = System.IO.Path.GetFullPath(outPath);
+
+                if (!System.IO.File.Exists(scriptPath))
+                {
+                    _logger.LogWarning("Plot script not found at {ScriptPath}. Skipping plot. Current directory: {Cwd}", scriptPath, System.IO.Directory.GetCurrentDirectory());
+                    return;
+                }
 
                 var psi = new ProcessStartInfo
                 {
