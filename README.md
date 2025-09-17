@@ -62,6 +62,44 @@ From repository root:
 
 Program.cs tries multiple candidate locations for `appsettings.json` so you can run from the repo root or the project folder.
 
+## Running the OpenAPI Function and dev-tunnel
+
+This repository includes a small OpenAPI-backed Azure Function used by the demo agents (see `src/ExternalSignals.Api`). When running agents locally you can run the Function on localhost and either point the agents at `http://localhost:7071` (local-only) or expose the Function with a public tunnel so the Persistent Agents OpenAPI tool can call it.
+
+1. Run the Function locally
+   - Change to the function project and start the Functions host:
+     cd src/ExternalSignals.Api
+     func start --verbose
+   - Verify a sample endpoint (PowerShell):
+     Invoke-RestMethod -Uri 'http://localhost:7071/api/price/dayahead?zone=SE3&date=YYYY-MM-DD' -UseBasicParsing | ConvertTo-Json -Depth 5
+   - Or with curl (Windows):
+     curl -s "http://localhost:7071/api/price/dayahead?zone=SE3&date=YYYY-MM-DD" -H "Accept: application/json"
+
+2. Expose the Function with a tunnel (optional)
+   - If you need the Function to be reachable from outside your machine (for example when using the Persistent Agents service which calls your OpenAPI tool), expose the local host with a tunnel.
+   - Two common options:
+     - Azure Dev Tunnels (VS Code or azd dev tunnel workflows) — follow your preferred Azure Dev Tunnels setup and copy the public HTTPS URL.
+     - ngrok (quick alternative):
+       ngrok http 7071
+       Copy the generated https://... URL.
+
+3. Configure Foundry.Agents to use the OpenAPI Function
+   - Update `appsettings.Development.json` or set the environment variable `OpenApi:BaseUrl` to the public tunnel (or `http://localhost:7071` if running locally).
+     Example (partial):
+     {
+       "OpenApi": { "BaseUrl": "https://<your-tunnel-host>/api" }
+     }
+   - Ensure `Project:Endpoint` points to your Persistent Agents service when running against cloud agents. For local-only testing that does not require cloud Persistent Agents, you can run the agent code in a development mode if available.
+
+4. Authentication & function keys
+   - If your Function requires a function key or other auth, ensure the OpenAPI tool is reachable with the required headers or modify the Function to allow anonymous access for local testing only.
+
+5. Troubleshooting
+   - If the agent run cannot reach the OpenAPI tool, verify:
+     - The Functions host is running and returns 200 on the test endpoint.
+     - The tunnel URL is HTTPS (Persistent Agents/OpenAPI tools expect secure endpoints).
+     - Any function keys or authentication are configured in your local settings and the OpenApi:BaseUrl includes the correct path.
+
 ## Files of interest
 - `src/Foundry.Agents/Program.cs` — host bootstrap, DI, Key Vault support
 - `src/Foundry.Agents/Agents/` — agent implementations and helpers

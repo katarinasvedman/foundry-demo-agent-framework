@@ -1,12 +1,10 @@
+// This file previously declared IPersistentAgentsClientAdapter and has been moved to:
+//   src/Foundry.Agents/Agents/Shared/IPersistentAgentsClientAdapter.cs
+// The original type was removed during refactor to avoid duplicate type definitions.
+
 using System.Threading.Tasks;
 using System.Collections.Generic;
 
 namespace Foundry.Agents.Agents.RemoteData
 {
-    public interface IPersistentAgentsClientAdapter
-    {
-        Task<bool> AgentExistsAsync(string agentId);
-        // toolTypes: optional hint strings such as "openapi" or "code_interpreter" to request attaching specific tools
-        Task<string?> CreateAgentAsync(string modelDeploymentName, string name, string? instructions, IEnumerable<string>? toolTypes = null);
-    }
 }

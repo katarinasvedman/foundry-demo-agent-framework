@@ -15,7 +15,7 @@ namespace Foundry.Agents.Agents
 {
     internal static class AgentFileHelpers
     {
-        public static async Task<Dictionary<string, string>> ReadThreadMappingAsync(string threadMappingPath, ILogger logger)
+        public static async Task<Dictionary<string, string>> ReadThreadMappingAsync(string threadMappingPath, ILogger? logger)
         {
             try
             {
@@ -30,7 +30,7 @@ namespace Foundry.Agents.Agents
             }
         }
 
-        public static async Task SaveThreadMappingAsync(string threadMappingPath, Dictionary<string, string> mapping, ILogger logger)
+        public static async Task SaveThreadMappingAsync(string threadMappingPath, Dictionary<string, string> mapping, ILogger? logger)
         {
             try
             {
@@ -45,7 +45,7 @@ namespace Foundry.Agents.Agents
             }
         }
 
-        public static async Task<string> GetOrCreateThreadIdForAgentAsync(PersistentAgentsClient client, string agentId, string threadMappingPath, ILogger logger, CancellationToken cancellationToken)
+        public static async Task<string> GetOrCreateThreadIdForAgentAsync(PersistentAgentsClient client, string agentId, string threadMappingPath, ILogger? logger, CancellationToken cancellationToken)
         {
             var mapping = await ReadThreadMappingAsync(threadMappingPath, logger);
             if (mapping.TryGetValue(agentId, out var existingThreadId))

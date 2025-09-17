@@ -52,7 +52,7 @@ namespace Foundry.Agents.Agents.RemoteData
             try
             {
                 // If adapter wasn't provided via DI (tests), construct the real adapter using config/DefaultAzureCredential.
-                IPersistentAgentsClientAdapter adapter = _agentsAdapter ?? new RealPersistentAgentsClientAdapter(endpoint, _configuration, null);
+                IPersistentAgentsClientAdapter adapter = _agentsAdapter ?? new Foundry.Agents.Agents.Shared.RealPersistentAgentsClientAdapter(endpoint, _configuration, null);
 
                 // If an agent id is provided, check existence.
                 var providedAgentId = Environment.GetEnvironmentVariable("PROJECT_AGENT_ID") ?? _configuration["Project:AgentId"];

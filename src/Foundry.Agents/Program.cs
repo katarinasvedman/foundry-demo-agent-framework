@@ -3,7 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using Microsoft.Extensions.Configuration;
-using Foundry.Agents.Agents.RemoteData;
+using Foundry.Agents.Agents.Shared;
 using Foundry.Agents.Tools.OpenApi;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
@@ -12,6 +12,7 @@ using Foundry.Agents.Agents;
 using System.IO;
 using System;
 using Microsoft.ApplicationInsights.Extensibility;
+using Foundry.Agents.Agents.RemoteData;
 
 var builder = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration((context, cfg) =>
@@ -77,11 +78,11 @@ var builder = Host.CreateDefaultBuilder(args)
         if (endpoint.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase) || endpoint.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase))
         {
             // use local mock adapter for development to avoid Azure SDK requiring HTTPS for bearer tokens
-            services.AddSingleton<IPersistentAgentsClientAdapter>(sp => new LocalPersistentAgentsClientAdapter(endpoint, sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<LocalPersistentAgentsClientAdapter>>()));
+            services.AddSingleton<IPersistentAgentsClientAdapter>(sp => new Foundry.Agents.Agents.Shared.LocalPersistentAgentsClientAdapter(endpoint, sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<Foundry.Agents.Agents.Shared.LocalPersistentAgentsClientAdapter>>()));
         }
         else
         {
-            services.AddSingleton<IPersistentAgentsClientAdapter>(sp => new RealPersistentAgentsClientAdapter(endpoint, sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<RealPersistentAgentsClientAdapter>>()));
+            services.AddSingleton<IPersistentAgentsClientAdapter>(sp => new Foundry.Agents.Agents.Shared.RealPersistentAgentsClientAdapter(endpoint, sp.GetRequiredService<IConfiguration>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<Foundry.Agents.Agents.Shared.RealPersistentAgentsClientAdapter>>()));
         }
 
         services.AddHostedService<HostedAgentRunner>();

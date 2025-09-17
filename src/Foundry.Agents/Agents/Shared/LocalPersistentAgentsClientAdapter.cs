@@ -4,11 +4,10 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace Foundry.Agents.Agents.RemoteData
+namespace Foundry.Agents.Agents.Shared
 {
-    // LocalPersistentAgentsClientAdapter moved to:
-    //   src/Foundry.Agents/Agents/Shared/LocalPersistentAgentsClientAdapter.cs
-    // Original implementation removed to avoid duplicate type definitions.
+    // Simple local/mock adapter for development when Project:Endpoint is non-HTTPS (localhost).
+    // Returns a synthetic agent id and implements AgentExists/Create without calling the Azure SDK.
     public class LocalPersistentAgentsClientAdapter : IPersistentAgentsClientAdapter
     {
         private readonly string _endpoint;

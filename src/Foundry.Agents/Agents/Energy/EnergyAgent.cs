@@ -15,9 +15,17 @@ using System.Diagnostics;
 
 namespace Foundry.Agents.Agents.Energy
 {
-    // A lightweight scaffold for the EnergyAgent. It creates/uses a persistent agent via
-    // IPersistentAgentsClientAdapter and persists the agent id to Agents/Energy/agent-id.txt.
-    // The full run logic (OpenAPI + Code Interpreter orchestration) will be implemented next.
+    /// <summary>
+    /// EnergyAgent orchestrates the energy analysis demo.
+    /// Demo flow:
+    /// 1. Ensure agent exists (create if needed) and verify attached tools
+    /// 2. Send a prompt to the agent to compute baseline and measures
+    /// 3. Retrieve messages, detect the Energy GlobalEnvelope JSON and persist it
+    /// 4. Trigger the plotting script to produce a timestamped PNG for demo
+    ///
+    /// For presentation we keep verbose, structured logs at each step so the audience
+    /// can follow along easily.
+    /// </summary>
     public class EnergyAgent
     {
         private readonly IPersistentAgentsClientAdapter _adapter;
@@ -309,59 +317,17 @@ namespace Foundry.Agents.Agents.Energy
                                     _logger.LogInformation("Detected RemoteData activity in thread {ThreadId}: message contains RemoteData envelope or OpenAPI calls.", threadId);
                                 }
 
-                                // Detect and save Energy GlobalEnvelope JSON to docs/last_agent_output.json
+                                // Detect Energy GlobalEnvelope JSON and handle it once
                                 if (txt.Contains("\"agent\": \"Energy\"") || txt.Contains("\"agent\":\"Energy\""))
                                 {
+                                    // Delegate saving and plotting to a single helper for clarity
                                     try
                                     {
-                                        var doc = JsonDocument.Parse(txt);
-                                        var formatted = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
-                                        var outDir = System.IO.Path.Combine("docs");
-                                        System.IO.Directory.CreateDirectory(outDir);
-                                        var outPath = System.IO.Path.Combine(outDir, "last_agent_output.json");
-                                        System.IO.File.WriteAllText(outPath, formatted);
-                                        _logger.LogInformation("Saved Energy GlobalEnvelope to {Path}", outPath);
-
-                                        // Run the plotting script automatically, pass the saved JSON path
-                                        try
-                                        {
-                                            var cwd = System.IO.Directory.GetCurrentDirectory();
-                                            var scriptPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(cwd, "..", "..", "docs", "energy_measures_plot.py"));
-                                            var jsonPath = System.IO.Path.GetFullPath(outPath);
-
-                                            var psi = new ProcessStartInfo
-                                            {
-                                                FileName = "python",
-                                                Arguments = $"\"{scriptPath}\" \"{jsonPath}\"",
-                                                RedirectStandardOutput = true,
-                                                RedirectStandardError = true,
-                                                UseShellExecute = false,
-                                                CreateNoWindow = true
-                                            };
-
-                                            using var proc = Process.Start(psi);
-                                            if (proc != null)
-                                            {
-                                                var stdout = proc.StandardOutput.ReadToEnd();
-                                                var stderr = proc.StandardError.ReadToEnd();
-                                                proc.WaitForExit(60000); // wait up to 60s
-                                                _logger.LogInformation("Plot script stdout: {Stdout}", stdout);
-                                                if (!string.IsNullOrWhiteSpace(stderr)) _logger.LogWarning("Plot script stderr: {Stderr}", stderr);
-                                            }
-                                            else
-                                            {
-                                                _logger.LogWarning("Failed to start plot script process (Process.Start returned null)");
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            _logger.LogWarning(ex, "Failed to run plot script");
-                                        }
-
+                                        SaveEnergyOutputAndPlot(txt);
                                     }
                                     catch (Exception ex)
                                     {
-                                        _logger.LogWarning(ex, "Failed to parse or save Energy agent JSON output");
+                                        _logger.LogWarning(ex, "Failed to save or plot Energy GlobalEnvelope");
                                     }
                                 }
                             }
@@ -437,6 +403,59 @@ namespace Foundry.Agents.Agents.Energy
         {
             _logger.LogInformation("RunEnergyAsync not yet implemented");
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Save the Energy GlobalEnvelope JSON to docs/last_agent_output.json (pretty printed)
+        /// and invoke the plotting script to create a timestamped PNG. This helper isolates
+        /// filesystem and process interactions so the message loop remains easy to read.
+        /// </summary>
+        private void SaveEnergyOutputAndPlot(string jsonText)
+        {
+            try
+            {
+                var doc = JsonDocument.Parse(jsonText);
+                var formatted = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+                var outDir = System.IO.Path.Combine("docs");
+                System.IO.Directory.CreateDirectory(outDir);
+                var outPath = System.IO.Path.Combine(outDir, "last_agent_output.json");
+                System.IO.File.WriteAllText(outPath, formatted);
+                _logger.LogInformation("Saved Energy GlobalEnvelope (pretty JSON) to {Path}", outPath);
+
+                // Run the plotting script and capture output for demo exposition
+                var repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "..", ".."));
+                var scriptPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(repoRoot, "docs", "energy_measures_plot.py"));
+                var jsonPath = System.IO.Path.GetFullPath(outPath);
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "python",
+                    Arguments = $"\"{scriptPath}\" \"{jsonPath}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    var stdout = proc.StandardOutput.ReadToEnd();
+                    var stderr = proc.StandardError.ReadToEnd();
+                    proc.WaitForExit(60000);
+
+                    if (!string.IsNullOrWhiteSpace(stdout)) _logger.LogInformation("Plot script output:\n{Stdout}", stdout);
+                    if (!string.IsNullOrWhiteSpace(stderr)) _logger.LogWarning("Plot script errors:\n{Stderr}", stderr);
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to start plot script process (Process.Start returned null)");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse, save, or plot Energy GlobalEnvelope JSON");
+            }
         }
     }
 }
