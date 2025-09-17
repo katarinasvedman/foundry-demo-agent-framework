@@ -1,0 +1,69 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build artifacts
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Rider
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+.history/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+
+# dotnet user settings
+*.DotSettings.user
+
+# Logs
+*.log
+
+# Azure/local secrets
+local.settings.json
+secrets.json
+appsettings.*.Local.json
+appsettings.Development.json
+
+# Foundry local runtime artifacts
+Agents/RemoteData/agent-id.txt
+Agents/RemoteData/threads.json
+.tempSdkInspect/
+
+# Ignore published output
+publish/
+
+# node
+node_modules/
+
+# Ignore generated files
+**/*.generated.cs
+
+# Ignore Docker
+docker-compose.override.yml
+
+# Ignore coverage
+coverage/
+
+# Ignore test result files
+TestResults/
+
+# Ignore user-specific files
+*.log
+
+# End of file
