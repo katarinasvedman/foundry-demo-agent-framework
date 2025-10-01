@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using Foundry.Agents.Agents.RemoteData;
+using Foundry.Agents.Agents.Shared;
 using System.Collections.Generic;
 
 namespace Foundry.Agents.Tests
