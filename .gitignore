@@ -16,7 +16,7 @@ obj/
 *.sln.iml
 
 # VS Code
-.vscode/
+
 .history/
 
 # OS files
@@ -71,3 +71,12 @@ TestResults/
 **/docs/last_agent_output.json
 
 # End of file
+
+# Additional local/dev ignores added by assistant
+.vscode/
+Agents/*/agent-id.txt
+Agents/*/threads.json
+tmp/
+appsettings*.Development.json
+*.zip
+src/ExternalSignals.Api/publish.zip
