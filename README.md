@@ -57,68 +57,58 @@ You can also set these as environment variables using `:` (or `__` for some shel
 - `Project:ModelDeploymentName`
 
 ## Running locally
-From repository root:
-- dotnet run --project src/Foundry.Agents
+# Foundry Demo (C#)
 
-Program.cs tries multiple candidate locations for `appsettings.json` so you can run from the repo root or the project folder.
+A small demo repo showing persisted agents using Azure Persistent Agents and an OpenAPI-backed tool.
 
-## Running the OpenAPI Function and dev-tunnel
+This README is intentionally short and focuses on what contributors need to get started.
 
-This repository includes a small OpenAPI-backed Azure Function used by the demo agents (see `src/ExternalSignals.Api`). When running agents locally you can run the Function on localhost and either point the agents at `http://localhost:7071` (local-only) or expose the Function with a public tunnel so the Persistent Agents OpenAPI tool can call it.
+## Quick start
 
-1. Run the Function locally
-   - Change to the function project and start the Functions host:
-     cd src/ExternalSignals.Api
-     func start --verbose
-   - Verify a sample endpoint (PowerShell):
-     Invoke-RestMethod -Uri 'http://localhost:7071/api/price/dayahead?zone=SE3&date=YYYY-MM-DD' -UseBasicParsing | ConvertTo-Json -Depth 5
-   - Or with curl (Windows):
-     curl -s "http://localhost:7071/api/price/dayahead?zone=SE3&date=YYYY-MM-DD" -H "Accept: application/json"
+Prerequisites
+- .NET 8 SDK
+- Git
+- (Optional) Azure login for cloud-based Persistent Agents
 
-2. Expose the Function with a tunnel (optional)
-   - If you need the Function to be reachable from outside your machine (for example when using the Persistent Agents service which calls your OpenAPI tool), expose the local host with a tunnel.
-   - Two common options:
-     - Azure Dev Tunnels (VS Code or azd dev tunnel workflows) — follow your preferred Azure Dev Tunnels setup and copy the public HTTPS URL.
-     - ngrok (quick alternative):
-       ngrok http 7071
-       Copy the generated https://... URL.
+Commands
+- Restore: `dotnet restore`
+- Build: `dotnet build foundry-demo-take4.sln -c Debug`
+- Tests: `dotnet test foundry-demo-take4.sln -c Debug --no-build`
+- Run host: `dotnet run --project src/Foundry.Agents`
 
-3. Configure Foundry.Agents to use the OpenAPI Function
-   - Update `appsettings.Development.json` or set the environment variable `OpenApi:BaseUrl` to the public tunnel (or `http://localhost:7071` if running locally).
-     Example (partial):
-     {
-       "OpenApi": { "BaseUrl": "https://<your-tunnel-host>/api" }
-     }
-   - Ensure `Project:Endpoint` points to your Persistent Agents service when running against cloud agents. For local-only testing that does not require cloud Persistent Agents, you can run the agent code in a development mode if available.
+Note: configuration comes from `appsettings.json` and environment variables. Do not commit secrets.
 
-4. Authentication & function keys
-   - If your Function requires a function key or other auth, ensure the OpenAPI tool is reachable with the required headers or modify the Function to allow anonymous access for local testing only.
+## OpenAPI function (optional)
 
-5. Troubleshooting
-   - If the agent run cannot reach the OpenAPI tool, verify:
-     - The Functions host is running and returns 200 on the test endpoint.
-     - The tunnel URL is HTTPS (Persistent Agents/OpenAPI tools expect secure endpoints).
-     - Any function keys or authentication are configured in your local settings and the OpenApi:BaseUrl includes the correct path.
+The Function used by the demo lives in `src/ExternalSignals.Api`.
+- Run locally: `cd src/ExternalSignals.Api && func start`
+- If the Persistent Agents service must call your function, expose it with a tunnel (ngrok / Azure Dev Tunnels) and set `OpenApi:BaseUrl` to the public HTTPS URL.
 
-## Files of interest
-- `src/Foundry.Agents/Program.cs` — host bootstrap, DI, Key Vault support
-- `src/Foundry.Agents/Agents/` — agent implementations and helpers
-- `src/Foundry.Agents/Tools/OpenApi/` — bundled OpenAPI spec and helper tool
-- `infra/` — Bicep files for Azure deployments
+## Adapters (where to add shared code)
 
-## Notes & troubleshooting
-- The code persists agent ids and thread mappings to `Agents/<AgentName>/` by default. This path is included in `.gitignore`.
-- If you plan to run multiple processes concurrently, note the simple file-locking used for thread operations.
-- The adapter uses reflection when attaching connected-agent tools; SDK changes may require updates.
+Canonical location for shared adapters (interfaces/implementations):
+
+`src/Foundry.Agents/Agents/Shared/`
+
+Please add new adapters and shared types under `Agents/Shared` to avoid duplicate definitions in agent folders.
+
+## Recent cleanup
+
+- Removed dev-only utility `tools/inspect-remote-thread`.
+- Removed duplicate adapter placeholders under agent folders and consolidated the implementations in `Agents/Shared`.
+
+## Developer checks
+
+- Build & test locally (recommended):
+  - `dotnet build foundry-demo-take4.sln -c Debug`
+  - `dotnet test foundry-demo-take4.sln -c Debug --no-build`
 
 ## Contributing
-- Open a branch, make changes, run `dotnet test`, and submit a PR targeting `main`.
 
----
+- Branch from `main`, make small focused changes, run tests, and open a PR.
 
-If you'd like, I can:
-- add a sample `appsettings.json.example` file (without secrets),
-- run `dotnet restore` and `dotnet build` now and report errors, or
-- add a GitHub Actions workflow to run tests on push.
+Optional additions I can make:
+- `appsettings.json.example` (no secrets)
+- GitHub Actions to run tests on push
+## Contributing
 
-Tell me which you'd like next.
