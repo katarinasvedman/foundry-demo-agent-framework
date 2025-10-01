@@ -35,5 +35,12 @@ namespace Foundry.Agents.Agents.Shared
             _logger.LogInformation("LocalPersistentAgentsClientAdapter: creating synthetic agent id {AgentId} for agent {Name}", id, name);
             return Task.FromResult<string?>(id);
         }
+
+        public Task<bool> UpdateAgentOpenApiToolAsync(string agentId, string openApiSpecJson)
+        {
+            // Local adapter: no-op, pretend success
+            _logger.LogInformation("LocalPersistentAgentsClientAdapter: UpdateAgentOpenApiToolAsync called for {AgentId} (no-op)", agentId);
+            return Task.FromResult(true);
+        }
     }
 }

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "projectName": {
+      "type": "String",
+      "defaultValue": "<your-ai-foundry-project-name>"
+    },
+    "aiFoundryConnection": {
+      "type": "String",
+      "defaultValue": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Web/connections/AzureAIFoundryAgentService"
+    }
+  },
+  "triggers": {
+    "Recurrence": {
+      "type": "Recurrence",
+      "recurrence": {
+        "frequency": "Day",
+        "interval": 1
+      }
+    }
+  },
+  "actions": {
+    "Build_Energy_Prompt": {
+      "type": "Compose",
+      "inputs": {
+        "promptTemplate": "Plan and compute a deterministic baseline and three measures for energy usage for {date}. First call the connected agent RemoteData to fetch DayAheadPrice(zone='SE3',date={date}) and WeatherHourly(city='Stockholm',date={date}). Use ISO date format yyyy-MM-dd (do not send 'today' or placeholder tokens). Use connected tools as needed. Return only the GlobalEnvelope JSON with arrays of length 24 where applicable.",
+        "date": "@utcNow('yyyy-MM-dd')"
+      }
+    },
+    "AI_Foundry_CreateRun_Placeholder": {
+      "type": "Compose",
+  "inputs": "REPLACE_ME: In the Logic Apps designer, remove this Compose and add the 'Azure AI Foundry Agent Service' connector actions in sequence. Use outputs('Build_Energy_Prompt') to build the final message by replacing {date} in promptTemplate with outputs('Build_Energy_Prompt')?['date']. Example expression for message content: replace(body('Build_Energy_Prompt')?['promptTemplate'], '{date}', body('Build_Energy_Prompt')?['date']). Then: 1) Create thread (optional) 2) Create run (set message content to the replaced prompt; set project to @parameters('projectName')) 3) (optional) Delay 10s 4) Get run 5) List messages. Map the List messages output into the Response body so AI Foundry gets the assistant reply back."
+    },
+    "Response": {
+      "type": "Response",
+      "inputs": {
+        "statusCode": 200,
+        "body": {
+          "message": "Scheduled trigger executed. Replace placeholder with AI Foundry connector actions in Logic Apps designer."
+        }
+      },
+      "runAfter": {
+        "AI_Foundry_CreateRun_Placeholder": [
+          "Succeeded"
+        ]
+      }
+    }
+  },
+  "outputs": {}
+}

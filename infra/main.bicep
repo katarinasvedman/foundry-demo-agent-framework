@@ -22,7 +22,19 @@ resource app 'Microsoft.Web/sites@2022-03-01' = {
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|8.0'
     }
+    
   }
 }
 
 output siteUri string = 'https://${app.properties.defaultHostName}'
+
+// Module: AgentTrigger Logic App
+module agentTrigger './agenttrigger.bicep' = {
+  name: 'deployAgentTrigger'
+  params: {
+    logicAppName: 'AgentTrigger'
+    location: location
+  }
+}
+
+output agentTriggerWorkflowId string = agentTrigger.outputs.workflowResourceId

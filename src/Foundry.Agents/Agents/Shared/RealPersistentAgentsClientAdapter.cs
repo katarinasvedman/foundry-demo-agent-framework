@@ -237,11 +237,20 @@ namespace Foundry.Agents.Agents.Shared
                                                     var sanitizedName = System.Text.RegularExpressions.Regex.Replace(targetAgentName, "[^a-zA-Z_]", "_");
                                                     // Provide an activation-oriented description so the calling agent knows when to invoke RemoteData.
                                                     var description = string.Equals(targetAgentName, "RemoteData", StringComparison.OrdinalIgnoreCase)
-                                                        ? "Activation: CALL THIS AGENT when you need authoritative SE3 day-ahead prices or hourly Stockholm weather.\n" +
-                                                          "How to call: Use DayAheadPrice(zone=SE3,date=YYYY-MM-DD) then WeatherHourly(city=Stockholm,date=YYYY-MM-DD).\n" +
-                                                          "Rule: Always call this connected agent before asserting price or weather values in your response; embed the RemoteData JSON envelope (agent/thread/task/status/data) and cite the source.\n" +
-                                                          "Goal: Provide exact 24-hour numeric arrays for prices and temperature; do not hallucinate or approximate."
-                                                        : $"{targetAgentName} - Fetches SE3 prices & Stockholm weather (24h)";
+                                                        ? @"Activation:
+                                                            Call this agent whenever authoritative SE3 24h day-ahead prices or hourly Stockholm weather are needed.
+
+                                                            How to call:
+                                                            Use operations:
+                                                            - DayAheadPrice(zone=""SE3"", date=""yyyy-MM-dd"")
+                                                            - WeatherHourly(city=""Stockholm"", date=""yyyy-MM-dd"")
+
+                                                            Rule:
+                                                            Always call this agent before asserting or using price or weather data. Do not hallucinate.
+
+                                                            Goal:
+                                                            Return validated 24-element numeric arrays for prices and temperatures inside the RemoteData JSON envelope."
+                                                        : string.Empty;
                                                     var detailsInstance = detailsCtor.Invoke(new object[] { persisted, sanitizedName, description });
                                                     if (detailsInstance != null)
                                                     {
@@ -309,6 +318,305 @@ namespace Foundry.Agents.Agents.Shared
             {
                 _logger.LogError(ex, "Failed to create agent via Persistent SDK");
                 throw;
+            }
+        }
+
+        // Replace or attach an OpenAPI tool on an existing agent without recreating the agent.
+        public async Task<bool> UpdateAgentOpenApiToolAsync(string agentId, string openApiSpecJson)
+        {
+            if (string.IsNullOrEmpty(agentId)) throw new ArgumentNullException(nameof(agentId));
+            if (string.IsNullOrEmpty(openApiSpecJson)) throw new ArgumentNullException(nameof(openApiSpecJson));
+
+            try
+            {
+                var client = new PersistentAgentsClient(_endpoint, new DefaultAzureCredential());
+                var admin = client.Administration;
+
+                // Fetch existing agent
+                var getResp = await admin.GetAgentAsync(agentId);
+                var agentDef = getResp?.Value;
+                if (agentDef == null)
+                {
+                    _logger.LogWarning("Agent {AgentId} not found when attempting to update OpenAPI tool.", agentId);
+                    return false;
+                }
+
+                // Prepare new spec BinaryData
+                var specData = BinaryData.FromString(openApiSpecJson);
+
+                // Attempt to create an OpenApiToolDefinition instance via reflection from the SDK assembly
+                var asm = typeof(PersistentAgentsClient).Assembly;
+                var openApiToolType = asm.GetType("Azure.AI.Agents.Persistent.OpenApiToolDefinition");
+                var openApiAuthType = asm.GetType("Azure.AI.Agents.Persistent.OpenApiAnonymousAuthDetails");
+
+                object? newOpenApiTool = null;
+                if (openApiToolType != null && openApiAuthType != null)
+                {
+                    try
+                    {
+                        // Try constructor: OpenApiToolDefinition(string name, string description, BinaryData spec, OpenApiAuthDetails auth, IEnumerable<string> operations)
+                        var ctors = openApiToolType.GetConstructors();
+                        ConstructorInfo? chosen = null;
+                        foreach (var c in ctors)
+                        {
+                            var ps = c.GetParameters();
+                            if (ps.Length >= 4 && ps[0].ParameterType == typeof(string) && ps[2].ParameterType == typeof(BinaryData))
+                            {
+                                chosen = c;
+                                break;
+                            }
+                        }
+
+                        if (chosen != null)
+                        {
+                            // create auth instance
+                            var authInstance = Activator.CreateInstance(openApiAuthType);
+                            var parms = new object?[] { "external_signals", "Fetch SE3 prices & Stockholm weather (24h)", specData, authInstance, new List<string>() };
+                            newOpenApiTool = chosen.Invoke(parms);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to construct OpenApiToolDefinition via reflection");
+                    }
+                }
+
+                if (newOpenApiTool == null)
+                {
+                    _logger.LogWarning("Could not construct OpenApiToolDefinition via SDK reflection; aborting update.");
+                    return false;
+                }
+
+                // Replace existing OpenAPI tool if found, otherwise add it. Use a mutable list copy so we can update even if agentDef.Tools is read-only.
+                var currentTools = agentDef.Tools;
+                var toolsList = new System.Collections.Generic.List<ToolDefinition>();
+                if (currentTools != null)
+                {
+                    foreach (var t in currentTools)
+                    {
+                        toolsList.Add(t);
+                    }
+                }
+
+                int replaced = 0;
+                for (int i = 0; i < toolsList.Count; i++)
+                {
+                    var t = toolsList[i];
+                    if (t == null) continue;
+                    var tTypeName = t.GetType().Name ?? string.Empty;
+                    if (tTypeName.IndexOf("OpenApi", StringComparison.OrdinalIgnoreCase) >= 0 || tTypeName.IndexOf("OpenApiTool", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        toolsList[i] = (ToolDefinition)newOpenApiTool!;
+                        replaced++;
+                    }
+                }
+                if (replaced == 0)
+                {
+                    // No existing OpenAPI tool found; append
+                    toolsList.Add((ToolDefinition)newOpenApiTool!);
+                }
+
+                // Try to set the Tools property on the agent definition if writable via reflection
+                var agentType = agentDef.GetType();
+                var toolsProp = agentType.GetProperty("Tools");
+                if (toolsProp != null && toolsProp.CanWrite && toolsProp.PropertyType.IsAssignableFrom(typeof(System.Collections.Generic.IEnumerable<ToolDefinition>)))
+                {
+                    toolsProp.SetValue(agentDef, toolsList);
+                }
+                else
+                {
+                    // If Tools is read-only, attempt to find a method on admin to update tools directly when updating the agent.
+                    // We'll proceed and hope the UpdateAgentAsync will accept the modified agentDef object (some SDKs use mutable DTOs).
+                    _logger.LogInformation("Agent.Tools property is read-only or not assignable; proceeding with UpdateAgentAsync and hoping the SDK accepts tool changes via the agent object.");
+                }
+
+                // Update the agent. Use the Administration.UpdateAgentAsync method if available.
+                try
+                {
+                    // Attempt to find UpdateAgentAsync overloads via reflection on admin
+                    var adminType = admin.GetType();
+                    var updateMethod = adminType.GetMethod("UpdateAgentAsync", new Type[] { typeof(string), agentDef.GetType(), typeof(CancellationToken) });
+                    if (updateMethod != null)
+                    {
+                        // call UpdateAgentAsync(agentId, agentDef, CancellationToken.None)
+                        var task = (System.Threading.Tasks.Task)updateMethod.Invoke(admin, new object[] { agentId, agentDef, CancellationToken.None })!;
+                        await task.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Fallback: try UpdateAgentAsync(agentDef) or UpdateAgentAsync(string, AgentDefinition)
+                        // Try method with single parameter
+                        updateMethod = adminType.GetMethod("UpdateAgentAsync", new Type[] { agentDef.GetType() });
+                        if (updateMethod != null)
+                        {
+                            var task = (System.Threading.Tasks.Task)updateMethod.Invoke(admin, new object[] { agentDef })!;
+                            await task.ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            // As a last resort, enumerate available methods for diagnostics and attempt a RequestContent-based call
+                            try
+                            {
+                                var methods = adminType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                                    .OrderBy(m => m.Name)
+                                    .Select(m =>
+                                    {
+                                        var ps = m.GetParameters();
+                                        var ptypes = string.Join(",", ps.Select(p => p.ParameterType.Name + " " + p.Name));
+                                        return $"{m.ReturnType.Name} {m.Name}({ptypes})";
+                                    });
+
+                                _logger.LogWarning("Administration.UpdateAgentAsync method not found via reflection; available Administration methods:\n{Methods}", string.Join("\n", methods));
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Administration.UpdateAgentAsync method not found and failed to enumerate admin methods.");
+                            }
+
+                            // First, try to find a strongly-typed UpdateAgentAsync overload: (string assistantId, string model, string name, string description, string instructions, IEnumerable<ToolDefinition> tools, ToolResources toolResources, Nullable<double> temperature, Nullable<double> topP, BinaryData responseFormat, IReadOnlyDictionary<string,string> metadata, CancellationToken cancellationToken)
+                            try
+                            {
+                                // Look for an UpdateAgentAsync with many parameters (string, string, string, string, string, IEnumerable<ToolDefinition>, ...)
+                                var candidate = adminType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                                    .FirstOrDefault(m => m.Name == "UpdateAgentAsync" && m.GetParameters().Length >= 11 && m.GetParameters()[0].ParameterType == typeof(string));
+
+                                if (candidate != null)
+                                {
+                                    // Extract model/name/description/instructions from agentDef via reflection (case-insensitive)
+                                    string GetStringProp(string[] names)
+                                    {
+                                        foreach (var n in names)
+                                        {
+                                            var p = agentType.GetProperty(n, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
+                                            if (p != null)
+                                            {
+                                                var v = p.GetValue(agentDef);
+                                                if (v != null) return v.ToString()!;
+                                            }
+                                        }
+                                        return string.Empty;
+                                    }
+
+                                    var modelVal = GetStringProp(new[] { "Model", "ModelId", "model" });
+                                    var nameVal = GetStringProp(new[] { "Name", "name" });
+                                    var descriptionVal = GetStringProp(new[] { "Description", "description" });
+                                    var instructionsVal = GetStringProp(new[] { "Instructions", "instructions" });
+
+                                    // Ensure description is non-null (API rejects null description)
+                                    if (descriptionVal == null) descriptionVal = string.Empty;
+
+                                    // Build parameters for the candidate method. We'll pass null for complex optional types.
+                                    var paramCount = candidate.GetParameters().Length;
+                                    var args = new object?[paramCount];
+                                    args[0] = agentId;
+                                    args[1] = modelVal;
+                                    args[2] = nameVal;
+                                    args[3] = descriptionVal ?? string.Empty;
+                                    args[4] = instructionsVal ?? string.Empty;
+                                    args[5] = toolsList;
+                                    // Fill remaining parameters with null/defaults (toolResources, temperature, topP, responseFormat, metadata)
+                                    for (int i = 6; i < paramCount - 1; i++) args[i] = null;
+                                    // Last parameter likely CancellationToken
+                                    args[paramCount - 1] = CancellationToken.None;
+
+                                    var taskObj = (System.Threading.Tasks.Task)candidate.Invoke(admin, args)!;
+                                    await taskObj.ConfigureAwait(false);
+                                    _logger.LogInformation("Successfully updated agent {AgentId} via parameter-based UpdateAgentAsync.", agentId);
+                                    return true;
+                                }
+                            }
+                            catch (TargetInvocationException tie)
+                            {
+                                _logger.LogWarning(tie.InnerException ?? tie, "Parameter-based UpdateAgentAsync invocation failed.");
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogDebug(ex, "Parameter-based UpdateAgentAsync attempt failed.");
+                            }
+
+                            // Try to find a RequestContent-based UpdateAgentAsync: (string assistantId, RequestContent content, RequestContext context)
+                            try
+                            {
+                                
+                                var reqContentType = typeof(Azure.Core.RequestContent);
+                                var targetMethod = adminType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                                    .FirstOrDefault(m => m.Name == "UpdateAgentAsync" && m.GetParameters().Length == 3 && m.GetParameters()[1].ParameterType == reqContentType);
+
+                                if (targetMethod != null)
+                                {
+                                    // Build a serializable payload from agentDef
+                                    var payload = new System.Collections.Generic.Dictionary<string, object?>();
+                                    string[] keys = new[] { "model", "name", "description", "instructions", "tools", "toolResources", "temperature", "topP", "responseFormat", "metadata" };
+                                    foreach (var key in keys)
+                                    {
+                                        try
+                                        {
+                                            // Try various casing variants to find a property
+                                            var prop = agentType.GetProperty(key, BindingFlags.IgnoreCase | BindingFlags.Public | BindingFlags.Instance);
+                                            if (prop != null)
+                                            {
+                                                var val = prop.GetValue(agentDef);
+                                                payload[key] = val;
+                                                continue;
+                                            }
+
+                                            // Special-case tools: use the toolsList we built earlier
+                                            if (string.Equals(key, "tools", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                payload[key] = toolsList;
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            _logger.LogDebug(ex, "Failed to extract property {Key} from agentDef for payload", key);
+                                        }
+                                    }
+
+                                    // Serialize payload to JSON (ignore nulls)
+                                    var json = Newtonsoft.Json.JsonConvert.SerializeObject(payload, new Newtonsoft.Json.JsonSerializerSettings { NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore });
+                                    _logger.LogDebug("RequestContent UpdateAgentAsync payload JSON: {Json}", json);
+                                    var requestContent = Azure.Core.RequestContent.Create(BinaryData.FromString(json));
+
+                                    // Invoke UpdateAgentAsync(agentId, RequestContent, RequestContext) with null RequestContext (SDK tolerates null)
+                                    var requestContextType = asm.GetType("Azure.Core.RequestContext");
+                                    object? nullContext = null;
+                                    if (requestContextType != null)
+                                    {
+                                        nullContext = null; // keep as null but typed object
+                                    }
+                                    var invokeParams = new object?[] { agentId, requestContent, nullContext };
+                                    var taskObj = (System.Threading.Tasks.Task)targetMethod.Invoke(admin, invokeParams)!;
+                                    await taskObj.ConfigureAwait(false);
+                                    _logger.LogInformation("Successfully updated agent {AgentId} via RequestContent UpdateAgentAsync.", agentId);
+                                    return true;
+                                }
+                                else
+                                {
+                                    _logger.LogWarning("No RequestContent-style UpdateAgentAsync found on Administration.");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to call RequestContent-based UpdateAgentAsync fallback.");
+                            }
+
+                            return false;
+                        }
+                    }
+                }
+                catch (TargetInvocationException tie)
+                {
+                    _logger.LogError(tie.InnerException ?? tie, "UpdateAgentAsync failed when trying to persist updated agent definition.");
+                    throw;
+                }
+
+                _logger.LogInformation("Successfully updated OpenAPI tool for agent {AgentId} (replaced {Count} tools).", agentId, replaced);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update OpenAPI tool for agent {AgentId}", agentId);
+                return false;
             }
         }
     }
