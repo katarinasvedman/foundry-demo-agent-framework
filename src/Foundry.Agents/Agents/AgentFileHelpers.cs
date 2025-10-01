@@ -19,6 +19,10 @@ namespace Foundry.Agents.Agents
         {
             try
             {
+                // Thread mapping file stores a persistent mapping from agent-id -> thread-id
+                // so that repeated demo runs reuse the same thread (keeps context/history).
+                // If the mapping file doesn't exist we return an empty mapping and the
+                // caller will create a new thread and persist it.
                 if (!File.Exists(threadMappingPath)) return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 var txt = await File.ReadAllTextAsync(threadMappingPath);
                 return JsonSerializer.Deserialize<Dictionary<string, string>>(txt) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

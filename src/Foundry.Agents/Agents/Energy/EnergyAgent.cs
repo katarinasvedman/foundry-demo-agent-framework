@@ -118,10 +118,70 @@ namespace Foundry.Agents.Agents.Energy
             var instructions = Foundry.Agents.Agents.InstructionReader.ReadSection("Energy");
             if (string.IsNullOrWhiteSpace(instructions))
             {
-                // Inline fallback instructions
-                instructions =
-                    "You must return only JSON (no extra text) with:\n{\n  \"agent\":\"Energy\", \"thread_id\":\"<string>\", \"task_id\":\"<string>\", \"status\":\"<ok|needs_input|error>\", \"summary\":\"<1-3 sentences; no chain-of-thought>\", \"data\":{}, \"next_actions\":[], \"citations\":[]\n}\n" +
-                    "If baseline unknown, call OpenAPI operations DayAheadPrice(zone='SE3',date=today) and WeatherHourly(city='Stockholm',date=today). Use Code Interpreter to estimate baseline.kwh (24h) and three measures with delta_kwh and impact_profile[24]. Enforce 24-item arrays where specified. Currency: SEK; Zone: SE3; Location: Stockholm; TZ: Europe/Stockholm.";
+                                // Inline fallback instructions
+                                instructions = @"You are Energy. Return only JSON per:
+
+                            {
+                                ""agent"": ""Energy"",
+                                ""thread_id"": ""<string>"",
+                                ""task_id"": ""<string>"",
+                                ""status"": ""<ok|needs_input|error>"",
+                                ""summary"": ""<1-3 sentences; no chain-of-thought>"",
+                                ""data"": {},
+                                ""next_actions"": [],
+                                ""citations"": []
+                            }
+
+                            Required inputs:
+                            zone, city, date (yyyy-MM-dd). If any missing -> status:""needs_input"" with one short question. Do not ask for confirmations if provided.
+
+                            Routing (strict):
+                            For price & weather, always call RemoteDataAgent with a flat params object (no query):
+                            {
+                                ""type"": ""call_agent"",
+                                ""name"": ""RemoteDataAgent"",
+                                ""params"": { ""zone"": ""<zone>"", ""city"": ""<city>"", ""date"": ""<yyyy-MM-dd>"" }
+                            }
+
+                            Computation (Code Interpreter):
+                            After RemoteData returns arrays (24 prices & 24 temps), call Code Interpreter and:
+                            import random, numpy as np; random.seed(0); np.random.seed(0)
+                            Assign prices = [...] and temperatures = [...] on separate lines (no inline comments).
+
+                            Compute:
+                            baseline.kwh
+                            Three measures: HVAC setpoint optimization, LED retrofit, Occupancy sensors; each with name, delta_kwh, impact_profile[24], confidence
+                            optimized.kwh, expected_reduction_pct
+
+                            Print exactly one JSON object; arrays length 24; round to 3 decimals. Retry once on CI error; else status:""error"" with a brief diagnostic in summary.
+
+                            Email (simple):
+                            If the user asked to send/email or provided an address, append in the final envelope:
+                            {
+                                ""type"": ""call_agent"",
+                                ""name"": ""EmailAssistantAgent"",
+                                ""params"": {
+                                    ""email_to"": ""<recipient(s)>"",
+                                    ""email_subject"": ""Energy report — ${zone} / ${city} — ${date}"",
+                                    ""email_body"": ""<copy of the summary field>""
+                                }
+                            }
+
+                            Do not claim the email was sent; the email agent reports that.
+
+                            Output (final)
+                            ""data"": {
+                                ""assumptions"": { ""zone"":""<zone>"", ""city"":""<city>"", ""date"":""<yyyy-MM-dd>"", ""horizon_hours"":24 },
+                                ""baseline"": { ""kwh"": <number> },
+                                ""measures"": [
+                                    { ""name"":""HVAC setpoint optimization"",""delta_kwh"":<number>,""impact_profile"": [<24>],""confidence"":0.8 },
+                                    { ""name"":""LED retrofit"",""delta_kwh"":<number>,""impact_profile"": [<24>],""confidence"":0.7 },
+                                    { ""name"":""Occupancy sensors"",""delta_kwh"":<number>,""impact_profile"": [<24>],""confidence"":0.7 }
+                                ],
+                                ""optimized"": { ""kwh"": <number>, ""expected_reduction_pct"": <number> }
+                            }
+
+                            Never fabricate numbers. If RemoteData or CI didn’t run in this thread, do not produce a computed report.";
             }
 
             _logger.LogInformation("Creating EnergyAgent using model deployment {ModelDeployment}", modelDeploymentName);
@@ -298,7 +358,13 @@ namespace Foundry.Agents.Agents.Energy
                     var messages = client.Messages.GetMessages(threadId);
                     var msgList = messages.ToList();
 
-                    // Detect whether RemoteData (connected agent) was invoked in this thread
+                    // Detect whether RemoteData (connected agent) was invoked in this thread.
+                    // NOTE: this is a heuristic that scans the textual messages in the Energy thread for
+                    // indicators (e.g. "agent":"RemoteData", DayAheadPrice, WeatherHourly, external_signals).
+                    // It can produce false positives when:
+                    //  - RemoteData posted its assistant envelope into a separate thread (RemoteData keeps its own thread)
+                    //  - The platform returned tool outputs directly to the running agent without persisting an assistant message
+                    // As a result, absence of these markers does not necessarily mean the run lacked RemoteData input.
                     bool remoteDataObserved = false;
                     foreach (var threadMessage in msgList)
                     {
@@ -344,7 +410,9 @@ namespace Foundry.Agents.Agents.Energy
 
                     if (!remoteDataObserved)
                     {
-                        _logger.LogWarning("No RemoteData assistant message or OpenAPI call was observed in the Energy thread {ThreadId}. If you expected RemoteData to be invoked, increase logging or verify the connected agent was attached to Energy.", threadId);
+                        // Previously logged as a warning; for demo purposes this can be noisy and is a heuristic.
+                        // Keep an informational note instead so developers can still see the detection outcome without a warning.
+                        _logger.LogInformation("RemoteData was not observed in the Energy thread {ThreadId} (heuristic check). This may be a false-positive if tool outputs were returned directly to the run or RemoteData posted to a different thread.", threadId);
                     }
                     else
                     {
