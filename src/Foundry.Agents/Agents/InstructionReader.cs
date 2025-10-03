@@ -6,11 +6,20 @@ namespace Foundry.Agents.Agents
     public static class InstructionReader
     {
         // Read the section for agentName from Agents/RemoteData/RemoteDataInstructions.md
-        // Looks for a header like: "# <AgentName> Agent Instructions" and returns the content until the next '---' or next top-level header.
+        // Prefer a per-agent file at Agents/<Agent>/<Agent>Instructions.md, falling back to the shared RemoteData file.
+        // If neither exists, return empty string.
         public static string ReadSection(string agentName)
         {
             try
             {
+                // 1) per-agent file
+                var perAgentPath = Path.Combine("Agents", agentName, agentName + "Instructions.md");
+                if (File.Exists(perAgentPath))
+                {
+                    return File.ReadAllText(perAgentPath).Trim();
+                }
+
+                // 2) legacy composite file (RemoteDataInstructions.md) with headers
                 var path = Path.Combine("Agents", "RemoteData", "RemoteDataInstructions.md");
                 if (!File.Exists(path)) return string.Empty;
                 var txt = File.ReadAllText(path);
@@ -20,7 +29,7 @@ namespace Foundry.Agents.Agents
                 if (idx < 0)
                 {
                     // Fallback: return the whole file
-                    return txt;
+                    return txt.Trim();
                 }
 
                 var start = idx + header.Length;

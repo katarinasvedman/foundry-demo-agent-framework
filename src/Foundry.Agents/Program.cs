@@ -73,6 +73,17 @@ var builder = Host.CreateDefaultBuilder(args)
         services.AddHttpClient<OpenApiTool>();
         services.AddSingleton<OpenApiTool>();
 
+        // Register LogicAppTool (HttpClient + DefaultAzureCredential)
+        services.AddHttpClient<Foundry.Agents.Tools.LogicApp.LogicAppTool>();
+        services.AddSingleton<Foundry.Agents.Tools.LogicApp.LogicAppTool>(sp =>
+        {
+            var http = sp.GetRequiredService<System.Net.Http.HttpClient>();
+            var cfg = sp.GetRequiredService<IConfiguration>();
+            var logger = sp.GetRequiredService<ILogger<Foundry.Agents.Tools.LogicApp.LogicAppTool>>();
+            var cred = new DefaultAzureCredential();
+            return new Foundry.Agents.Tools.LogicApp.LogicAppTool(http, cred, logger, cfg);
+        });
+
         // register the real adapter using the PROJECT_ENDPOINT from config
         var endpoint = context.Configuration["Project:Endpoint"] ?? throw new InvalidOperationException("Configuration 'Project:Endpoint' is required");
         if (endpoint.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase) || endpoint.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase))

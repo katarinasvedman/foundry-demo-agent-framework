@@ -114,82 +114,21 @@ namespace Foundry.Agents.Agents.Energy
                 }
             }
 
-            // Prefer instructions from the shared markdown section, fall back to an inline default.
+            // Prefer instructions from a per-agent markdown (Agents/Energy/EnergyInstructions.md) or the shared RemoteData file.
             var instructions = Foundry.Agents.Agents.InstructionReader.ReadSection("Energy");
             if (string.IsNullOrWhiteSpace(instructions))
             {
-                                // Inline fallback instructions
-                                instructions = @"You are Energy. Return only JSON per:
-
-                            {
-                                ""agent"": ""Energy"",
-                                ""thread_id"": ""<string>"",
-                                ""task_id"": ""<string>"",
-                                ""status"": ""<ok|needs_input|error>"",
-                                ""summary"": ""<1-3 sentences; no chain-of-thought>"",
-                                ""data"": {},
-                                ""next_actions"": [],
-                                ""citations"": []
-                            }
-
-                            Required inputs:
-                            zone, city, date (yyyy-MM-dd). If any missing -> status:""needs_input"" with one short question. Do not ask for confirmations if provided.
-
-                            Routing (strict):
-                            For price & weather, always call RemoteDataAgent with a flat params object (no query):
-                            {
-                                ""type"": ""call_agent"",
-                                ""name"": ""RemoteDataAgent"",
-                                ""params"": { ""zone"": ""<zone>"", ""city"": ""<city>"", ""date"": ""<yyyy-MM-dd>"" }
-                            }
-
-                            Computation (Code Interpreter):
-                            After RemoteData returns arrays (24 prices & 24 temps), call Code Interpreter and:
-                            import random, numpy as np; random.seed(0); np.random.seed(0)
-                            Assign prices = [...] and temperatures = [...] on separate lines (no inline comments).
-
-                            Compute:
-                            baseline.kwh
-                            Three measures: HVAC setpoint optimization, LED retrofit, Occupancy sensors; each with name, delta_kwh, impact_profile[24], confidence
-                            optimized.kwh, expected_reduction_pct
-
-                            Print exactly one JSON object; arrays length 24; round to 3 decimals. Retry once on CI error; else status:""error"" with a brief diagnostic in summary.
-
-                            Email (simple):
-                            If the user asked to send/email or provided an address, append in the final envelope:
-                            {
-                                ""type"": ""call_agent"",
-                                ""name"": ""EmailAssistantAgent"",
-                                ""params"": {
-                                    ""email_to"": ""<recipient(s)>"",
-                                    ""email_subject"": ""Energy report — ${zone} / ${city} — ${date}"",
-                                    ""email_body"": ""<copy of the summary field>""
-                                }
-                            }
-
-                            Do not claim the email was sent; the email agent reports that.
-
-                            Output (final)
-                            ""data"": {
-                                ""assumptions"": { ""zone"":""<zone>"", ""city"":""<city>"", ""date"":""<yyyy-MM-dd>"", ""horizon_hours"":24 },
-                                ""baseline"": { ""kwh"": <number> },
-                                ""measures"": [
-                                    { ""name"":""HVAC setpoint optimization"",""delta_kwh"":<number>,""impact_profile"": [<24>],""confidence"":0.8 },
-                                    { ""name"":""LED retrofit"",""delta_kwh"":<number>,""impact_profile"": [<24>],""confidence"":0.7 },
-                                    { ""name"":""Occupancy sensors"",""delta_kwh"":<number>,""impact_profile"": [<24>],""confidence"":0.7 }
-                                ],
-                                ""optimized"": { ""kwh"": <number>, ""expected_reduction_pct"": <number> }
-                            }
-
-                            Never fabricate numbers. If RemoteData or CI didn’t run in this thread, do not produce a computed report.";
+                // Small, safe fallback to avoid creating an empty agent. The full instructions should be placed in
+                // Agents/Energy/EnergyInstructions.md so they are loaded at initialization.
+                instructions = "You are Energy. Return exactly one JSON object with fields: \"agent\", \"thread_id\", \"task_id\", \"status\", \"summary\", \"data\", \"next_actions\", \"citations\". Required inputs: zone, city, date (yyyy-MM-dd). Use RemoteDataAgent for price/weather. If required tools did not run, return status 'needs_input' or 'error'.";
             }
 
             _logger.LogInformation("Creating EnergyAgent using model deployment {ModelDeployment}", modelDeploymentName);
             try
             {
                 // Request both the OpenAPI and Code Interpreter tools for the Energy agent
-                _logger.LogInformation("Creating agent with tools: {Tools}", new[] { "openapi", "code_interpreter", "connected:RemoteData" });
-                var createdAgentId = await _adapter.CreateAgentAsync(modelDeploymentName, "EnergyAgent", instructions, new[] { "openapi", "code_interpreter", "connected:RemoteData" });
+                _logger.LogInformation("Creating agent with tools: {Tools}", new[] { "openapi", "code_interpreter", "connected:RemoteData", "connected:EmailAssistant" });
+                var createdAgentId = await _adapter.CreateAgentAsync(modelDeploymentName, "EnergyAgent", instructions, new[] { "openapi", "code_interpreter", "connected:RemoteData", "connected:EmailAssistant" });
                 if (!string.IsNullOrEmpty(createdAgentId))
                 {
                     await AgentFileHelpers.PersistAgentIdAsync(createdAgentId, _configuration, _logger, "Energy");
@@ -366,6 +305,7 @@ namespace Foundry.Agents.Agents.Energy
                     //  - The platform returned tool outputs directly to the running agent without persisting an assistant message
                     // As a result, absence of these markers does not necessarily mean the run lacked RemoteData input.
                     bool remoteDataObserved = false;
+                    string? lastEnergyEnvelopeText = null;
                     foreach (var threadMessage in msgList)
                     {
                         _logger.LogInformation("{CreatedAt:yyyy-MM-dd HH:mm:ss} - {Role}: ", threadMessage.CreatedAt, threadMessage.Role);
@@ -383,18 +323,10 @@ namespace Foundry.Agents.Agents.Energy
                                     _logger.LogInformation("Detected RemoteData activity in thread {ThreadId}: message contains RemoteData envelope or OpenAPI calls.", threadId);
                                 }
 
-                                // Detect Energy GlobalEnvelope JSON and handle it once
+                                // Detect Energy GlobalEnvelope JSON and remember the latest one
                                 if (txt.Contains("\"agent\": \"Energy\"") || txt.Contains("\"agent\":\"Energy\""))
                                 {
-                                    // Delegate saving and plotting to a single helper for clarity
-                                    try
-                                    {
-                                        SaveEnergyOutputAndPlot(txt);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogWarning(ex, "Failed to save or plot Energy GlobalEnvelope");
-                                    }
+                                    lastEnergyEnvelopeText = txt;
                                 }
                             }
                             else if (contentItem is MessageImageFileContent imageFileItem)
@@ -405,6 +337,20 @@ namespace Foundry.Agents.Agents.Energy
                             {
                                 _logger.LogInformation("(unhandled content item type: {Type})", contentItem.GetType().Name);
                             }
+                        }
+                    }
+
+                    // If an Energy envelope was found in history, process only the most recent one to avoid
+                    // duplicate saves/plots from prior runs kept in the thread.
+                    if (!string.IsNullOrWhiteSpace(lastEnergyEnvelopeText))
+                    {
+                        try
+                        {
+                            SaveEnergyOutputAndPlot(lastEnergyEnvelopeText);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to save or plot latest Energy GlobalEnvelope");
                         }
                     }
 

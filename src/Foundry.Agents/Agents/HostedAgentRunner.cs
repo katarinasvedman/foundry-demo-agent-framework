@@ -9,6 +9,8 @@ namespace Foundry.Agents.Agents
         private readonly IServiceProvider _services;
         private readonly ILogger<HostedAgentRunner> _logger;
         private readonly IHostApplicationLifetime _lifetime;
+        private int _shutdownRequested = 0;
+        private int _started = 0;
         public HostedAgentRunner(IServiceProvider services, ILogger<HostedAgentRunner> logger, IHostApplicationLifetime lifetime)
         {
             _services = services;
@@ -18,6 +20,12 @@ namespace Foundry.Agents.Agents
 
         public async Task StartAsync(CancellationToken cancellationToken)
         {
+            if (System.Threading.Interlocked.Exchange(ref _started, 1) == 1)
+            {
+                _logger.LogInformation("HostedAgentRunner.StartAsync already executed; skipping re-entry.");
+                return;
+            }
+
             _logger.LogInformation("HostedAgentRunner starting. Initializing Energy agent (Energy is main, RemoteData attached as connected agent).");
             using var scope = _services.CreateScope();
 
@@ -56,8 +64,17 @@ namespace Foundry.Agents.Agents
             // After the agent run completes (or fails), stop the application so the process exits cleanly
             try
             {
-                _logger.LogInformation("Energy initialization finished; requesting host shutdown.");
-                _lifetime.StopApplication();
+                // Ensure we request shutdown only once to avoid duplicate logs/requests when StartAsync
+                // is executed more than once in edge cases (or the host was started multiple times).
+                if (System.Threading.Interlocked.Exchange(ref _shutdownRequested, 1) == 0)
+                {
+                    _logger.LogInformation("Energy initialization finished; requesting host shutdown.");
+                    _lifetime.StopApplication();
+                }
+                else
+                {
+                    _logger.LogDebug("Shutdown already requested previously; skipping duplicate request.");
+                }
             }
             catch (Exception ex)
             {
