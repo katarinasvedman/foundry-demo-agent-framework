@@ -247,3 +247,61 @@ appsettings.json.example
 
 Notes
 - The README includes the example `appsettings.json` above so you can copy it into `appsettings.Development.json` (do not commit secrets).
+
+## Agent framework workflow (run lifecycle)
+
+This section explains how the demo's agent framework runs and where local runtime artifacts are persisted. It helps developers understand thread/message/run lifecycle, why `thread-<id>.lock` files appear, and how to keep the repo clean.
+
+### 1) Core lifecycle (single run)
+- Prepare a stable run id and thread id: the Orchestrator or host builds a `thread_id` (run-scoped) and passes it to agents — agents echo the same `thread_id` so outputs are traceable.
+- Create a user message: the host uses the Persistent Agents SDK to create a message in the agent's thread (Messages.CreateMessageAsync).
+- Start a run: the host invokes Runs.CreateRunAsync(threadId, agentId, ...) which kicks off the agent execution on the service.
+- Poll/watch the run: the client can poll Runs.GetRunAsync or stream events (WatchStreamAsync) to receive AgentRunUpdateEvent fragments and the final assembled output.
+
+### 2) Thread mapping and locks (local behavior)
+- Thread mapping: the demo persists a mapping at `Agents/<Agent>/threads.json` that stores agentId → threadId so demos reuse the same thread and preserve history.
+- File locks: to avoid concurrent processes manipulating the same thread, the host creates a file lock named `thread-<threadId>.lock` in the agent folder while a run is active. The lock is removed when the run completes. Stale lock files can be removed safely when no process is running.
+
+### 3) Local runtime artifacts (what you will see)
+- `Agents/<Agent>/agent-id.txt` — persisted agent id (if created locally). The repo ignores these files.
+- `Agents/<Agent>/threads.json` — mapping of agentId → threadId (ignored by git).
+- `Agents/*/thread-<id>.lock` — temporary lock files created during runs (ignored by git). Remove stale locks manually if necessary.
+- `run-outputs/` — orchestrator run artifacts (raw event arrays, per-stage outputs like `{runId}.remoteData.json` and `{runId}.energy.json`, `{runId}.final.json`, and an events log). These are persisted for debugging and are ignored by git.
+
+### 4) Why generated files show up in `git status`
+If you run the host locally before updating `.gitignore`, agent runtime artifacts (agent-id, threads.json, run-outputs, thread locks) may appear as changed files. To avoid this:
+
+- Add these patterns to `.gitignore` (the repo already contains many of them):
+
+```text
+Agents/*/agent-id.txt
+Agents/*/threads.json
+Agents/*/thread-*.lock
+run-outputs/
+```
+
+- If those files were accidentally committed, stop tracking them but keep them on disk:
+
+```powershell
+git rm --cached "Agents/*/agent-id.txt" "Agents/*/threads.json"
+git commit -m "chore: stop tracking agent runtime artifacts"
+```
+
+### 5) Quick cleanup commands
+- Remove stale lock files:
+
+```powershell
+Get-ChildItem -Path .\Agents -Filter "thread-*.lock" -Recurse | Remove-Item -Force
+```
+
+- Remove run-outputs and other generated directories (only if you don't need the artifacts):
+
+```powershell
+Remove-Item -Recurse -Force .\run-outputs, .\workflows-decomp, .\asminspect -ErrorAction SilentlyContinue
+```
+
+### 6) Developer tips
+- To capture the exact payload sent to the Persistent Agents service (for diagnosing array_above_max_length or message-splitting issues), enable HTTP logging in the SDK or route traffic through a local proxy (Fiddler/mitmproxy) and capture the POST payload containing `messages[0].content`.
+- To avoid content splitting across many fragments, serialize structured runtime objects into a single JSON string before forwarding them to downstream agents.
+
+If you want, I can add a small `tools/cleanup.ps1` script that removes runtime artifacts and optionally zips `run-outputs/` for evidence submission.
