@@ -101,3 +101,6 @@ docs/workflow_run_result.json
 src/Foundry.Agents/Agents/EmailAssistant/agent-id.txt
 src/Foundry.Agents/Agents/Energy/agent-id.txt
 src/Foundry.Agents/Agents/Energy/threads.json
+src/Foundry.Agents/Agents/Orchestrator/OrchestratorAgent copy.cs.copy
+src/Foundry.Agents/Agents/RemoteData/agent-id.txt
+src/Foundry.Agents/Agents/RemoteData/RemoteDataInstructions copy.md
