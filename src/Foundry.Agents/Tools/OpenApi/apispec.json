@@ -6,7 +6,7 @@
   },
     "servers": [
     {
-      "url": "https://qv2lmqwm-7071.eun1.devtunnels.ms/api"
+      "url": "https://remote-data.azurewebsites.net/api"
     }
   ],
   "paths": {

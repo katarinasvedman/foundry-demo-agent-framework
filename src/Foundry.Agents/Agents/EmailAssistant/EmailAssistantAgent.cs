@@ -70,6 +70,12 @@ namespace Foundry.Agents.Agents.EmailAssistant
                 }
 
                 var providedAgentId = Environment.GetEnvironmentVariable("PROJECT_AGENT_ID") ?? _configuration["Project:AgentId"];
+                // If no env/config provided id, fallback to the persisted file for EmailAssistant
+                if (string.IsNullOrEmpty(providedAgentId))
+                {
+                    var persisted = await AgentFileHelpers.ReadPersistedAgentIdAsync(_configuration, "EmailAssistant", _logger);
+                    if (!string.IsNullOrEmpty(persisted)) providedAgentId = persisted;
+                }
                 if (!string.IsNullOrEmpty(providedAgentId))
                 {
                     _logger.LogInformation("Verifying provided agent id {AgentId}", providedAgentId);
@@ -90,7 +96,9 @@ namespace Foundry.Agents.Agents.EmailAssistant
                     instructions = "You are EmailAssistantAgent. Draft and send concise emails via an OpenAPI/HTTP Logic App connector. Accept email_to, email_subject, email_body. Return a JSON envelope with status ok|needs_input|error.";
                 }
 
-                var newAgentId = await adapter.CreateAgentAsync(modelDeploymentName, "EmailAssistantAgent", instructions, new[] { "openapi" });
+                // EmailAssistant is implemented to invoke Azure Logic Apps via a host-provided LogicAppTool
+                // and does not require attaching an OpenAPI tool to the persisted agent.
+                var newAgentId = await adapter.CreateAgentAsync(modelDeploymentName, "EmailAssistantAgent", instructions, Array.Empty<string>());
                 if (!string.IsNullOrEmpty(newAgentId))
                 {
                     _logger.LogInformation("Created EmailAssistantAgent with id {AgentId}", newAgentId);

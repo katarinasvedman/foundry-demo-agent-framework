@@ -97,10 +97,7 @@ namespace Foundry.Agents.Agents.Energy
                         {
                             _logger.LogWarning(ex, "Failed to call Administration.GetAgentAsync to inspect attached tools for agent {AgentId}", agentId);
                         }
-
-                        // Invoke the agent once to demonstrate functionality and log its response.
-                        var demoPromptExisting = AgentPrompts.HighLevelAsk;
-                        await RunEnergyAsync(projectEndpoint, agentId, demoPromptExisting, CancellationToken.None);
+                        // Persisted agent exists and we've attempted verification; nothing further to do.
                         return;
                     }
                     else
@@ -123,12 +120,15 @@ namespace Foundry.Agents.Agents.Energy
                 instructions = "You are Energy. Return exactly one JSON object with fields: \"agent\", \"thread_id\", \"task_id\", \"status\", \"summary\", \"data\", \"next_actions\", \"citations\". Required inputs: zone, city, date (yyyy-MM-dd). Use RemoteDataAgent for price/weather. If required tools did not run, return status 'needs_input' or 'error'.";
             }
 
-            _logger.LogInformation("Creating EnergyAgent using model deployment {ModelDeployment}", modelDeploymentName);
+                _logger.LogInformation("Creating EnergyAgent using model deployment {ModelDeployment}", modelDeploymentName);
             try
             {
-                // Request both the OpenAPI and Code Interpreter tools for the Energy agent
-                _logger.LogInformation("Creating agent with tools: {Tools}", new[] { "openapi", "code_interpreter", "connected:RemoteData", "connected:EmailAssistant" });
-                var createdAgentId = await _adapter.CreateAgentAsync(modelDeploymentName, "EnergyAgent", instructions, new[] { "openapi", "code_interpreter", "connected:RemoteData", "connected:EmailAssistant" });
+                // Request only the Code Interpreter tool for the Energy agent. External data should
+                // come from the RemoteData agent, not via an OpenAPI tool attached to Energy.
+                _logger.LogInformation("Creating agent with tools: {Tools}", new[] { "code_interpreter" });
+                // Postfix agent name with AF for Ai Foundry demo instances. Persist ID under folder 'Energy'.
+                var createName = "EnergyAgentAF";
+                var createdAgentId = await _adapter.CreateAgentAsync(modelDeploymentName, createName, instructions, new[] { "code_interpreter" });
                 if (!string.IsNullOrEmpty(createdAgentId))
                 {
                     await AgentFileHelpers.PersistAgentIdAsync(createdAgentId, _configuration, _logger, "Energy");
@@ -173,10 +173,6 @@ namespace Foundry.Agents.Agents.Energy
                     {
                         _logger.LogWarning(ex, "Failed to call Administration.GetAgentAsync to inspect attached tools for agent {AgentId}", createdAgentId);
                     }
-
-                    // Run a demo prompt after creation
-                    var demoPrompt = AgentPrompts.HighLevelAsk;
-                    await RunEnergyAsync(projectEndpoint, createdAgentId, demoPrompt, CancellationToken.None);
                 }
                 else
                 {
@@ -191,200 +187,101 @@ namespace Foundry.Agents.Agents.Energy
         }
 
         // Full CreateRun -> poll -> retrieve messages flow for Energy agent
-        public async Task RunEnergyAsync(string endpoint, string agentId, string userPrompt, CancellationToken cancellationToken = default)
+    public async Task<object?> RunEnergyAsync(string endpoint, string agentId, CancellationToken cancellationToken = default, object? initialPayload = null, string? threadId = null, string? threadLockDirectory = null)
         {
+            _logger.LogInformation("Invoking Energy agent {AgentId}", agentId);
             try
             {
-                _logger.LogInformation("Invoking Energy agent {AgentId} with prompt: {Prompt}", agentId, userPrompt);
-
-                var client = new PersistentAgentsClient(endpoint, new DefaultAzureCredential());
-
-                // Thread mapping path for Energy agent
-                var threadMappingPath = System.IO.Path.Combine("Agents", "Energy", "threads.json");
-
-                // Get or create thread
-                var threadId = await AgentFileHelpers.GetOrCreateThreadIdForAgentAsync(client, agentId, threadMappingPath, _logger, cancellationToken);
-                _logger.LogInformation("Using thread {ThreadId} for Energy agent {AgentId}", threadId, agentId);
-
-                // Acquire a simple file lock for the thread
-                var dir = System.IO.Path.Combine("Agents", "Energy");
-                var lockAcquired = await AgentFileHelpers.AcquireThreadLockAsync(dir, threadId, TimeSpan.FromSeconds(5));
-                if (!lockAcquired)
-                {
-                    _logger.LogWarning("Could not acquire lock for thread {ThreadId}; another process may be running. Aborting run.", threadId);
-                    return;
-                }
-
+                // Normalize incoming initialPayload so the assistant sees the expected `data` object.
+                object? extractedData = null;
                 try
                 {
-                    // Normalize prompt (replace 'today' tokens)
-                    var normalizedPrompt = userPrompt;
-                    var todayIso = DateTime.UtcNow.ToString("yyyy-MM-dd");
+                    if (initialPayload != null)
+                    {
+                        // If initialPayload is a string that contains a fenced JSON block, sanitize it first
+                        if (initialPayload is string s)
+                        {
+                            var cleaned = SanitizeJsonText(s);
+                            // Try to parse the cleaned string into an object
+                            try
+                            {
+                                var parsed = Newtonsoft.Json.JsonConvert.DeserializeObject<object?>(cleaned);
+                                initialPayload = parsed ?? cleaned;
+                            }
+                            catch
+                            {
+                                // keep original cleaned string
+                                initialPayload = cleaned;
+                            }
+                        }
+
+                        // Serialize/deserialize to a dictionary to inspect keys reliably
+                        var json = Newtonsoft.Json.JsonConvert.SerializeObject(initialPayload);
+                        var dict = Newtonsoft.Json.JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, object?>>(json);
+                        if (dict != null)
+                        {
+                            // Common locations: input.data, data, Data
+                            if (dict.TryGetValue("input", out var inputObj) && inputObj != null)
+                            {
+                                try
+                                {
+                                    var inputJson = Newtonsoft.Json.JsonConvert.SerializeObject(inputObj);
+                                    var inputDict = Newtonsoft.Json.JsonConvert.DeserializeObject<System.Collections.Generic.Dictionary<string, object?>>(inputJson);
+                                    if (inputDict != null && inputDict.TryGetValue("data", out var d) && d != null)
+                                    {
+                                        extractedData = d;
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            if (extractedData == null)
+                            {
+                                if (dict.TryGetValue("data", out var d2) && d2 != null) extractedData = d2;
+                                else if (dict.TryGetValue("Data", out var d3) && d3 != null) extractedData = d3;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Energy: failed to normalize initial payload");
+                }
+
+                // Build payload: include normalized prompt, original initialPayload under 'input', and extractedData under 'data' if found
+                var payloadDict = new System.Collections.Generic.Dictionary<string, object?>();
+                //payloadDict["prompt"] = normalizedPrompt;
+                payloadDict["input"] = initialPayload;
+                if (extractedData != null) payloadDict["data"] = extractedData;
+                var payload = payloadDict as object;
+                _logger.LogDebug("Energy payload normalized. HasData={HasData}", extractedData != null);
+
+                // Ask the adapter to run the persisted agent with the payload (single call, no pre-posted messages)
+                var assistantText = await _adapter.RunAgentAsync(agentId, payload, cancellationToken);
+
+                object? parsedResult = null;
+                if (!string.IsNullOrWhiteSpace(assistantText))
+                {
                     try
                     {
-                        normalizedPrompt = normalizedPrompt.Replace("today's", todayIso, StringComparison.OrdinalIgnoreCase);
-                        normalizedPrompt = normalizedPrompt.Replace("today", todayIso, StringComparison.OrdinalIgnoreCase);
+                        SaveEnergyOutputAndPlot(assistantText);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to save or plot latest Energy GlobalEnvelope");
+                    }
+
+                    try
+                    {
+                        var cleaned = SanitizeJsonText(assistantText);
+                        parsedResult = Newtonsoft.Json.JsonConvert.DeserializeObject<object?>(cleaned) ?? cleaned;
                     }
                     catch
                     {
-                        normalizedPrompt = userPrompt;
-                    }
-
-                    _logger.LogDebug("User prompt after normalization: {Prompt}", normalizedPrompt);
-
-                    var textBlock = PersistentAgentsModelFactory.MessageInputTextBlock(normalizedPrompt);
-                    var content = BinaryData.FromObjectAsJson(textBlock);
-                    var messageResp = await client.Messages.CreateMessageAsync(threadId, MessageRole.User, content.ToString());
-                    var message = messageResp?.Value;
-                    if (message == null)
-                    {
-                        _logger.LogError("Failed to create message in thread {ThreadId}", threadId);
-                        return;
-                    }
-                    _logger.LogInformation("Created message {MessageId} in thread {ThreadId}", message.Id, threadId);
-
-                    // Start run
-                    var runResp = await client.Runs.CreateRunAsync(threadId, agentId, overrideInstructions: null, cancellationToken: cancellationToken);
-                    var run = runResp?.Value;
-                    if (run == null)
-                    {
-                        _logger.LogError("Failed to create run for thread {ThreadId} and agent {AgentId}", threadId, agentId);
-                        return;
-                    }
-                    _logger.LogInformation("Started run {RunId} (status={Status}) for thread {ThreadId}", run.Id, run.Status, threadId);
-
-                    // Poll until finished
-                    while (run.Status == RunStatus.Queued || run.Status == RunStatus.InProgress)
-                    {
-                        _logger.LogDebug("Run {RunId} status {Status} - waiting...", run.Id, run.Status);
-                        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
-                        var getRunResp = await client.Runs.GetRunAsync(threadId, run.Id, cancellationToken: cancellationToken);
-                        run = getRunResp?.Value ?? run;
-                    }
-
-                    if (run.Status != RunStatus.Completed)
-                    {
-                        var runId = run?.Id ?? "<unknown>";
-                        var runStatusStr = run?.Status.ToString() ?? "<unknown>";
-                        var lastErr = run?.LastError;
-                        _logger.LogWarning("Run {RunId} completed with unexpected status {Status}. LastError: {LastError}", runId, runStatusStr, lastErr is null ? "<none>" : (lastErr.Message ?? "<none>"));
-
-                        try
-                        {
-                            if (lastErr != null)
-                            {
-                                _logger.LogDebug("Run.LastError details: Code={Code} Message={Message}", lastErr?.Code, lastErr?.Message);
-                            }
-                        }
-                        catch
-                        {
-                            // ignore
-                        }
-
-                        var lastMsg = lastErr?.Message?.ToLowerInvariant() ?? string.Empty;
-                        if (lastMsg.Contains("http") || lastMsg.Contains("502") || lastMsg.Contains("504") || lastMsg.Contains("timeout") || lastMsg.Contains("connection") || lastMsg.Contains("5"))
-                        {
-                            _logger.LogWarning("The failure appears to be an HTTP/transport error. This often means a downstream tool endpoint (for example your OpenAPI Function) was unreachable or returned a 5xx. Verify the Function is running and accessible at the configured OpenAPI endpoint.");
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogInformation("Run {RunId} completed successfully.", run.Id);
-                    }
-
-                    // Retrieve messages for the thread and print outputs
-                    _logger.LogDebug("Retrieving messages for thread {ThreadId}", threadId);
-                    var messages = client.Messages.GetMessages(threadId);
-                    var msgList = messages.ToList();
-
-                    // Detect whether RemoteData (connected agent) was invoked in this thread.
-                    // NOTE: this is a heuristic that scans the textual messages in the Energy thread for
-                    // indicators (e.g. "agent":"RemoteData", DayAheadPrice, WeatherHourly, external_signals).
-                    // It can produce false positives when:
-                    //  - RemoteData posted its assistant envelope into a separate thread (RemoteData keeps its own thread)
-                    //  - The platform returned tool outputs directly to the running agent without persisting an assistant message
-                    // As a result, absence of these markers does not necessarily mean the run lacked RemoteData input.
-                    bool remoteDataObserved = false;
-                    string? lastEnergyEnvelopeText = null;
-                    foreach (var threadMessage in msgList)
-                    {
-                        _logger.LogInformation("{CreatedAt:yyyy-MM-dd HH:mm:ss} - {Role}: ", threadMessage.CreatedAt, threadMessage.Role);
-                        foreach (var contentItem in threadMessage.ContentItems)
-                        {
-                            if (contentItem is MessageTextContent textItem)
-                            {
-                                _logger.LogInformation(textItem.Text);
-
-                                // Heuristics: look for JSON envelope emitted by RemoteData agent
-                                var txt = textItem.Text ?? string.Empty;
-                                if (txt.Contains("\"agent\": \"RemoteData\"") || txt.Contains("\"agent\":\"RemoteData\"") || txt.Contains("DayAheadPrice") || txt.Contains("WeatherHourly") || txt.Contains("external_signals"))
-                                {
-                                    remoteDataObserved = true;
-                                    _logger.LogInformation("Detected RemoteData activity in thread {ThreadId}: message contains RemoteData envelope or OpenAPI calls.", threadId);
-                                }
-
-                                // Detect Energy GlobalEnvelope JSON and remember the latest one
-                                if (txt.Contains("\"agent\": \"Energy\"") || txt.Contains("\"agent\":\"Energy\""))
-                                {
-                                    lastEnergyEnvelopeText = txt;
-                                }
-                            }
-                            else if (contentItem is MessageImageFileContent imageFileItem)
-                            {
-                                _logger.LogInformation("<image from ID: {FileId}>", imageFileItem.FileId);
-                            }
-                            else
-                            {
-                                _logger.LogInformation("(unhandled content item type: {Type})", contentItem.GetType().Name);
-                            }
-                        }
-                    }
-
-                    // If an Energy envelope was found in history, process only the most recent one to avoid
-                    // duplicate saves/plots from prior runs kept in the thread.
-                    if (!string.IsNullOrWhiteSpace(lastEnergyEnvelopeText))
-                    {
-                        try
-                        {
-                            SaveEnergyOutputAndPlot(lastEnergyEnvelopeText);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "Failed to save or plot latest Energy GlobalEnvelope");
-                        }
-                    }
-
-                    if (!remoteDataObserved)
-                    {
-                        // Previously logged as a warning; for demo purposes this can be noisy and is a heuristic.
-                        // Keep an informational note instead so developers can still see the detection outcome without a warning.
-                        _logger.LogInformation("RemoteData was not observed in the Energy thread {ThreadId} (heuristic check). This may be a false-positive if tool outputs were returned directly to the run or RemoteData posted to a different thread.", threadId);
-                    }
-                    else
-                    {
-                        _logger.LogInformation("RemoteData was observed in the Energy thread {ThreadId}.", threadId);
-                    }
-
-                    // Rotate thread if it grows too large
-                    const int rotateThreshold = 100;
-                    if (msgList.Count > rotateThreshold)
-                    {
-                        _logger.LogInformation("Thread {ThreadId} exceeded {Threshold} messages; creating a new thread and updating mapping.", threadId, rotateThreshold);
-                        var newThreadResp = await client.Threads.CreateThreadAsync(new System.Collections.Generic.List<ThreadMessageOptions>());
-                        var newThread = newThreadResp?.Value;
-                        if (newThread != null)
-                        {
-                            var mapping = await AgentFileHelpers.ReadThreadMappingAsync(threadMappingPath, _logger);
-                            mapping[agentId] = newThread.Id;
-                            await AgentFileHelpers.SaveThreadMappingAsync(threadMappingPath, mapping, _logger);
-                            _logger.LogInformation("Rotated thread for agent {AgentId}: {OldThread} -> {NewThread}", agentId, threadId, newThread.Id);
-                        }
+                        parsedResult = assistantText;
                     }
                 }
-                finally
-                {
-                    AgentFileHelpers.ReleaseThreadLock(dir, threadId, _logger);
-                }
+                return parsedResult;
             }
             catch (RequestFailedException rf)
             {
@@ -408,6 +305,7 @@ namespace Foundry.Agents.Agents.Energy
             {
                 _logger.LogError(ex, "Unexpected error while invoking Energy agent {AgentId}", agentId);
             }
+            return null;
         }
 
         // Placeholder for the orchestration run logic that will call tools and the code interpreter.
@@ -428,7 +326,9 @@ namespace Foundry.Agents.Agents.Energy
         {
             try
             {
-                var doc = JsonDocument.Parse(jsonText);
+                var cleaned = SanitizeJsonText(jsonText);
+                _logger.LogDebug("Sanitized Energy output (first 200 chars): {Preview}", cleaned?.Length > 200 ? cleaned.Substring(0,200) : cleaned);
+                var doc = JsonDocument.Parse(cleaned ?? string.Empty);
                 var formatted = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
                 var outDir = System.IO.Path.Combine("docs");
                 System.IO.Directory.CreateDirectory(outDir);
@@ -475,6 +375,45 @@ namespace Foundry.Agents.Agents.Energy
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to parse, save, or plot Energy GlobalEnvelope JSON");
+            }
+        }
+
+    // Remove common Markdown code fences and surrounding backticks so JSON can be parsed robustly.
+    public static string SanitizeJsonText(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return raw ?? string.Empty;
+            var txt = raw.Trim();
+
+            try
+            {
+                // If the assistant returned a fenced block like ```json\n{...}\n```
+                var firstFence = txt.IndexOf("```");
+                if (firstFence >= 0)
+                {
+                    var startLineEnd = txt.IndexOf('\n', firstFence);
+                    if (startLineEnd >= 0)
+                    {
+                        var lastFence = txt.LastIndexOf("```");
+                        if (lastFence > startLineEnd)
+                        {
+                            var inner = txt.Substring(startLineEnd + 1, lastFence - (startLineEnd + 1));
+                            return inner.Trim();
+                        }
+                    }
+                }
+
+                // If it's wrapped with single backticks around whole value: `...`
+                if (txt.Length >= 2 && txt[0] == '`' && txt[txt.Length - 1] == '`')
+                {
+                    return txt.Trim('`').Trim();
+                }
+
+                // Otherwise return trimmed text
+                return txt;
+            }
+            catch
+            {
+                return txt;
             }
         }
     }

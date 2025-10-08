@@ -80,3 +80,27 @@ tmp/
 appsettings*.Development.json
 *.zip
 src/ExternalSignals.Api/publish.zip
+Agents/*/thread-*.lock
+run-outputs/
+workflows-decomp/
+asminspect/
+.tempSdkInspect/
+src/**/bin/
+src/**/obj/
+tmp/
+*.local
+energy_with_lines.txt
+workflows-decomp-search.txt
+workflows-inspector-output.txt
+docs/orchestrator-findings.md
+docs/sample_energy_global_envelope_ok.json
+docs/sample_orchestrator_payload.json
+docs/sample_remote_data_output.json
+docs/workflow_run_result_compact.json
+docs/workflow_run_result.json
+src/Foundry.Agents/Agents/EmailAssistant/agent-id.txt
+src/Foundry.Agents/Agents/Energy/agent-id.txt
+src/Foundry.Agents/Agents/Energy/threads.json
+src/Foundry.Agents/Agents/Orchestrator/OrchestratorAgent copy.cs.copy
+src/Foundry.Agents/Agents/RemoteData/agent-id.txt
+src/Foundry.Agents/Agents/RemoteData/RemoteDataInstructions copy.md
