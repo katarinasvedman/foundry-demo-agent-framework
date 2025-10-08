@@ -77,6 +77,12 @@ namespace Foundry.Agents.Agents.RemoteData
 
                 // If a provided agent id is configured, verify it and persist locally.
                 var providedAgentId = Environment.GetEnvironmentVariable("PROJECT_AGENT_ID") ?? _configuration["Project:AgentId"];
+                // If no env/config provided id, fallback to the persisted file for RemoteData
+                if (string.IsNullOrEmpty(providedAgentId))
+                {
+                    var persisted = await AgentFileHelpers.ReadPersistedAgentIdAsync(_configuration, "RemoteData", _logger);
+                    if (!string.IsNullOrEmpty(persisted)) providedAgentId = persisted;
+                }
                 if (!string.IsNullOrEmpty(providedAgentId))
                 {
                     _logger.LogInformation("Verifying provided agent id {AgentId}", providedAgentId);
@@ -100,8 +106,10 @@ namespace Foundry.Agents.Agents.RemoteData
                 // from any orchestrator (Energy) thread. The orchestrator may still receive tool outputs
                 // as part of its run, but the textual envelope from RemoteData will live in RemoteData's
                 // thread unless we explicitly instruct it to post elsewhere.
-                // NOTE: inserted system prompt provided by user (verbatim). Update here if prompt needs changing.
-                var instructions = @"You are RemoteData. Return only JSON (no extra text):
+                // Prefer instructions from a per-agent markdown (Agents/RemoteData/RemoteDataInstructions.md)
+                // Fall back to the embedded default only when no file content is present.
+                var instructionsFromFile = InstructionReader.ReadSection("RemoteData");
+                var instructions = !string.IsNullOrWhiteSpace(instructionsFromFile) ? instructionsFromFile : @"You are RemoteData. Return only JSON (no extra text):
                     {
                     ""agent"": ""RemoteData"",
                     ""thread_id"": ""<string>"",
@@ -144,10 +152,13 @@ namespace Foundry.Agents.Agents.RemoteData
                     source: ""external_signals""
                     ";
 
-                var newAgentId = await adapter.CreateAgentAsync(modelDeploymentName, "RemoteDataAgent", instructions, new[] { "openapi" });
+                // Postfix agent name with AF for Ai Foundry demo instances.
+                var createName = "RemoteDataAgentAF";
+                var newAgentId = await adapter.CreateAgentAsync(modelDeploymentName, createName, instructions, new[] { "openapi" });
                 if (!string.IsNullOrEmpty(newAgentId))
                 {
                     _logger.LogInformation("Created agent with id {AgentId}", newAgentId);
+                    // Persist under the existing folder "RemoteData" so local tooling and thread mappings remain stable.
                     await AgentFileHelpers.PersistAgentIdAsync(newAgentId, _configuration, _logger, "RemoteData");
 
                     // Optionally run a demo prompt against the newly created agent and log its response.
@@ -168,7 +179,8 @@ namespace Foundry.Agents.Agents.RemoteData
         // Path to store agent->thread mapping
         private string ThreadMappingPath => Path.Combine("Agents", "RemoteData", "threads.json");
 
-        private async Task RunAgentAsync(string endpoint, string agentId, string userPrompt, CancellationToken cancellationToken)
+    // Run the persistent agent with a user prompt and return the last assistant text output (or null on failure)
+    public async Task<string?> RunAgentAsync(string endpoint, string agentId, string userPrompt, CancellationToken cancellationToken, string? threadId = null, string? threadLockDirectory = null)
         {
             try
             {
@@ -176,17 +188,20 @@ namespace Foundry.Agents.Agents.RemoteData
 
                 var client = new PersistentAgentsClient(endpoint, new DefaultAzureCredential());
 
-                // Step 2: Get or create a thread for this agent (persisted mapping)
-                var threadId = await AgentFileHelpers.GetOrCreateThreadIdForAgentAsync(client, agentId, ThreadMappingPath, _logger, cancellationToken);
+                // Step 2: Get or create a thread for this agent (persisted mapping) unless a run-scoped threadId was provided
+                if (string.IsNullOrEmpty(threadId))
+                {
+                    threadId = await AgentFileHelpers.GetOrCreateThreadIdForAgentAsync(client, agentId, ThreadMappingPath, _logger, cancellationToken);
+                }
                 _logger.LogInformation("Using thread {ThreadId} for agent {AgentId}", threadId, agentId);
 
                 // Acquire a simple file lock for the thread to avoid concurrent runs
-                var dir = Path.Combine("Agents", "RemoteData");
+                var dir = threadLockDirectory ?? Path.Combine("Agents", "RemoteData");
                 var lockAcquired = await AgentFileHelpers.AcquireThreadLockAsync(dir, threadId, TimeSpan.FromSeconds(5));
                 if (!lockAcquired)
                 {
                     _logger.LogWarning("Could not acquire lock for thread {ThreadId}; another process may be running. Aborting run.", threadId);
-                    return;
+                    return null;
                 }
 
                 try
@@ -218,7 +233,7 @@ namespace Foundry.Agents.Agents.RemoteData
                     if (message == null)
                     {
                         _logger.LogError("Failed to create message in thread {ThreadId}", threadId);
-                        return;
+                        return null;
                     }
 
                     _logger.LogInformation("Created message {MessageId} in thread {ThreadId}", message.Id, threadId);
@@ -230,7 +245,7 @@ namespace Foundry.Agents.Agents.RemoteData
                     if (run == null)
                     {
                         _logger.LogError("Failed to create run for thread {ThreadId} and agent {AgentId}", threadId, agentId);
-                        return;
+                        return null;
                     }
 
                     _logger.LogInformation("Started run {RunId} (status={Status}) for thread {ThreadId}", run.Id, run.Status, threadId);
@@ -269,6 +284,7 @@ namespace Foundry.Agents.Agents.RemoteData
                         if (lastMsg.Contains("http") || lastMsg.Contains("502") || lastMsg.Contains("504") || lastMsg.Contains("bad gateway") || lastMsg.Contains("timeout") || lastMsg.Contains("connection") || lastMsg.Contains("proxy") || lastMsg.Contains("5"))
                         {
                             _logger.LogWarning("The failure appears to be an HTTP/transport error. This often means a downstream tool endpoint (for example your OpenAPI Function) was unreachable or returned a 5xx. Verify the Function is running and accessible at the configured OpenAPI endpoint (OpenApi:BaseUrl) or check the inline OpenAPI tool URLs and logs.");
+                            return null;
                         }
                     }
                     else
@@ -276,6 +292,8 @@ namespace Foundry.Agents.Agents.RemoteData
                         _logger.LogInformation("Run {RunId} completed successfully.", run.Id);
                     }
 
+                    // Retrieve messages for the thread and capture outputs
+                    string? lastAssistantText = null;
                     // Retrieve messages for the thread and print outputs
                     _logger.LogDebug("Retrieving messages for thread {ThreadId}", threadId);
                     var messages = client.Messages.GetMessages(threadId);
@@ -290,6 +308,24 @@ namespace Foundry.Agents.Agents.RemoteData
                             if (contentItem is MessageTextContent textItem)
                             {
                                 _logger.LogInformation(textItem.Text);
+                                try
+                                {
+                                    if (threadMessage.Role.ToString().Equals("assistant", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                            // Defensive: strip surrounding Markdown fences if present so downstream callers receive raw JSON
+                                            var assistantRaw = textItem.Text;
+                                            try
+                                            {
+                                                assistantRaw = Foundry.Agents.Agents.Energy.EnergyAgent.SanitizeJsonText(assistantRaw);
+                                            }
+                                            catch { }
+                                            lastAssistantText = assistantRaw;
+                                    }
+                                }
+                                catch
+                                {
+                                    // ignore role parsing issues
+                                }
                             }
                             else if (contentItem is MessageImageFileContent imageFileItem)
                             {
@@ -319,6 +355,8 @@ namespace Foundry.Agents.Agents.RemoteData
                                 // This is intentionally independent for each agent.
                         }
                     }
+                    // Return the last assistant textual output if available
+                    return lastAssistantText;
                 }
                 finally
                 {
@@ -349,6 +387,8 @@ namespace Foundry.Agents.Agents.RemoteData
             {
                 _logger.LogError(ex, "Unexpected error while invoking agent {AgentId}", agentId);
             }
+            // Ensure a consistent null return when no assistant text could be retrieved
+            return null;
         }
     }
 }

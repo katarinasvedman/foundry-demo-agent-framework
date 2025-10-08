@@ -126,188 +126,10 @@ namespace Foundry.Agents.Agents.Shared
                     }
                 }
 
-                // Attach Connected Agent tools when requested in the format "connected:<AgentName>"
-                try
-                {
-                    var connectedRequests = requested.Where(t => t.StartsWith("connected:", StringComparison.OrdinalIgnoreCase)).ToList();
-                    if (connectedRequests.Count > 0)
-                    {
-                        var asm = typeof(PersistentAgentsClient).Assembly;
-                        var connectedType = asm.GetType("Azure.AI.Agents.Persistent.ConnectedAgentToolDefinition");
-                        foreach (var req in connectedRequests)
-                        {
-                            var parts = req.Split(new[] { ':' }, 2);
-                            if (parts.Length != 2) continue;
-                            var targetAgentName = parts[1];
-                            if (string.IsNullOrWhiteSpace(targetAgentName)) continue;
-
-                            // Try to read persisted agent id for that target agent name
-                            var persisted = await AgentFileHelpers.ReadPersistedAgentIdAsync(_configuration, targetAgentName, _logger);
-                            if (string.IsNullOrEmpty(persisted))
-                            {
-                                // No persisted id found for this connected agent; do not attach a connected tool.
-                                _logger.LogWarning("Requested connected agent '{Name}' but no persisted agent id found. Skipping connected tool.", targetAgentName);
-                                continue;
-                            }
-
-                            if (connectedType != null)
-                            {
-                                try
-                                {
-                                    bool attached = false;
-
-                                    // 1) Try constructor with three string parameters (agentId, name, description)
-                                    var threeStringCtor = connectedType.GetConstructor(new[] { typeof(string), typeof(string), typeof(string) });
-                                    if (threeStringCtor != null)
-                                    {
-                                        try
-                                        {
-                                            var desc = "Fetches SE3 prices & Stockholm weather (24h)";
-                                            var inst = threeStringCtor.Invoke(new object[] { persisted, targetAgentName, desc }) as ToolDefinition;
-                                            if (inst != null)
-                                            {
-                                                tools.Add(inst);
-                                                _logger.LogInformation("Attached connected agent tool (3-string ctor) for {AgentName} -> {AgentId}", targetAgentName, persisted);
-                                                attached = true;
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            _logger.LogDebug(ex, "3-string constructor invocation on ConnectedAgentToolDefinition failed");
-                                        }
-                                    }
-
-                                    if (!attached)
-                                    {
-                                        // 2) Try a constructor where first parameter is the agent id (string) and fill defaults for other params
-                                        var ctors = connectedType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-                                        ConstructorInfo? chosen = null;
-                                        foreach (var c in ctors)
-                                        {
-                                            var ps = c.GetParameters();
-                                            if (ps.Length >= 1 && ps[0].ParameterType == typeof(string))
-                                            {
-                                                chosen = c;
-                                                break;
-                                            }
-                                        }
-
-                                        if (chosen != null)
-                                        {
-                                            try
-                                            {
-                                                object?[] parms = new object?[chosen.GetParameters().Length];
-                                                parms[0] = persisted;
-                                                var ctorParams = chosen.GetParameters();
-                                                for (int i = 1; i < ctorParams.Length; i++)
-                                                {
-                                                    var p = ctorParams[i];
-                                                    if (p.ParameterType == typeof(string)) parms[i] = targetAgentName;
-                                                    else if (p.ParameterType == typeof(IEnumerable<string>)) parms[i] = new List<string>();
-                                                    else parms[i] = null;
-                                                }
-
-                                                var instance = Activator.CreateInstance(connectedType, parms) as ToolDefinition;
-                                                if (instance != null)
-                                                {
-                                                    tools.Add(instance);
-                                                    _logger.LogInformation("Attached connected agent tool for {AgentName} -> {AgentId}", targetAgentName, persisted);
-                                                    attached = true;
-                                                }
-                                            }
-                                            catch (Exception ex)
-                                            {
-                                                _logger.LogDebug(ex, "String-first constructor invocation on ConnectedAgentToolDefinition failed");
-                                            }
-                                        }
-                                    }
-
-                                    if (!attached)
-                                    {
-                                        // 3) Fallback: build a ConnectedAgentDetails and attempt to construct the tool from that
-                                        try
-                                        {
-                                            var detailsType = asm.GetType("Azure.AI.Agents.Persistent.ConnectedAgentDetails");
-                                            if (detailsType != null)
-                                            {
-                                                var detailsCtor = detailsType.GetConstructor(new[] { typeof(string), typeof(string), typeof(string) });
-                                                if (detailsCtor != null)
-                                                {
-                                                    // API requires the connected agent 'name' to match ^[a-zA-Z_]+$; sanitize to a valid token and keep a friendly display in the description.
-                                                    var sanitizedName = System.Text.RegularExpressions.Regex.Replace(targetAgentName, "[^a-zA-Z_]", "_");
-                                                    // Provide an activation-oriented description so the calling agent knows when to invoke RemoteData.
-                                                    var description = string.Equals(targetAgentName, "RemoteData", StringComparison.OrdinalIgnoreCase)
-                                                        ? @"Activation:
-                                                            Call this agent whenever authoritative SE3 24h day-ahead prices or hourly Stockholm weather are needed.
-
-                                                            How to call:
-                                                            Use operations:
-                                                            - DayAheadPrice(zone=""SE3"", date=""yyyy-MM-dd"")
-                                                            - WeatherHourly(city=""Stockholm"", date=""yyyy-MM-dd"")
-
-                                                            Rule:
-                                                            Always call this agent before asserting or using price or weather data. Do not hallucinate.
-
-                                                            Goal:
-                                                            Return validated 24-element numeric arrays for prices and temperatures inside the RemoteData JSON envelope."
-                                                        : string.Empty;
-                                                    var detailsInstance = detailsCtor.Invoke(new object[] { persisted, sanitizedName, description });
-                                                    if (detailsInstance != null)
-                                                    {
-                                                        var ctors2 = connectedType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-                                                        foreach (var c2 in ctors2)
-                                                        {
-                                                            var ps2 = c2.GetParameters();
-                                                            if (ps2.Length >= 1 && ps2[0].ParameterType == detailsType)
-                                                            {
-                                                                try
-                                                                {
-                                                                    var inst2 = c2.Invoke(new object[] { detailsInstance }) as ToolDefinition;
-                                                                    if (inst2 != null)
-                                                                    {
-                                                                        tools.Add(inst2);
-                                                                        _logger.LogInformation("Attached connected agent tool (via ConnectedAgentDetails) for {AgentName} -> {AgentId}", targetAgentName, persisted);
-                                                                        attached = true;
-                                                                        break;
-                                                                    }
-                                                                }
-                                                                catch (Exception ex)
-                                                                {
-                                                                    _logger.LogDebug(ex, "ConnectedAgentToolDefinition ctor accepting ConnectedAgentDetails failed");
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            _logger.LogDebug(ex, "ConnectedAgentDetails fallback failed");
-                                        }
-                                    }
-
-                                    if (!attached)
-                                    {
-                                        _logger.LogWarning("ConnectedAgentToolDefinition exists but could not be instantiated for agent {AgentName}.", targetAgentName);
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogWarning(ex, "Failed to construct ConnectedAgentToolDefinition for {AgentName}; skipping.", targetAgentName);
-                                }
-                            }
-                            else
-                            {
-                                _logger.LogWarning("ConnectedAgentToolDefinition type not found in SDK; cannot attach connected agent {AgentName}.", targetAgentName);
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error while processing connected agent tool requests");
-                }
+                // Connected agent tool wiring removed. Orchestration between agents should be handled by
+                // an external orchestrator (for example, OrchestratorAgent) rather than by attaching connected
+                // agent tool definitions at agent creation time. This avoids duplicate orchestration semantics
+                // and keeps agent tool registrations simple and explicit.
 
                 // Call CreateAgentAsync with strongly-typed parameters (pass CancellationToken)
                 var createResp = await admin.CreateAgentAsync(modelDeploymentName, name, null, instructionsToUse, tools, null, null, null, null, null, CancellationToken.None);
@@ -318,6 +140,62 @@ namespace Foundry.Agents.Agents.Shared
             {
                 _logger.LogError(ex, "Failed to create agent via Persistent SDK");
                 throw;
+            }
+        }
+
+        // Run a persisted agent with a structured payload. This implementation will create a run and
+        // include the payload as the initial input for the run, avoiding posting a separate payload message.
+        public async Task<string?> RunAgentAsync(string agentId, object payload, System.Threading.CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var client = new PersistentAgentsClient(_endpoint, new DefaultAzureCredential());
+
+                // Create a new thread for the run; many SDKs require a threadId for run lifecycle.
+                var threadResp = await client.Threads.CreateThreadAsync(new List<ThreadMessageOptions>());
+                var threadId = threadResp?.Value?.Id ?? string.Empty;
+
+                // Use the payload as the user input by creating a single user message content JSON and passing it to the run creation.
+                var payloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+                var textBlock = Azure.AI.Agents.Persistent.PersistentAgentsModelFactory.MessageInputTextBlock(payloadJson);
+                var content = BinaryData.FromObjectAsJson(textBlock);
+
+                // Create a user message in the thread as part of the run creation flow, but do it inline so we avoid separate pre-run posts.
+                var messageResp = await client.Messages.CreateMessageAsync(threadId, MessageRole.User, content.ToString(), cancellationToken: cancellationToken);
+
+                // Start run
+                var runResp = await client.Runs.CreateRunAsync(threadId, agentId, overrideInstructions: null, cancellationToken: cancellationToken);
+                var run = runResp?.Value;
+                if (run == null) return null;
+
+                // Poll until finished
+                while (run.Status == RunStatus.Queued || run.Status == RunStatus.InProgress)
+                {
+                    await Task.Delay(500, cancellationToken);
+                    var getRunResp = await client.Runs.GetRunAsync(threadId, run.Id, cancellationToken: cancellationToken);
+                    run = getRunResp?.Value ?? run;
+                }
+
+                // Retrieve messages and find last assistant text
+                var messages = client.Messages.GetMessages(threadId).ToList();
+                string? lastAssistantText = null;
+                foreach (var m in messages)
+                {
+                    foreach (var ci in m.ContentItems)
+                    {
+                        if (ci is MessageTextContent tc)
+                        {
+                            if (m.Role.ToString().Equals("assistant", System.StringComparison.OrdinalIgnoreCase)) lastAssistantText = tc.Text;
+                        }
+                    }
+                }
+
+                return lastAssistantText;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "RunAgentAsync failed for {AgentId}", agentId);
+                return null;
             }
         }
 

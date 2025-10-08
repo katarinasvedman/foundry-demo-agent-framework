@@ -36,6 +36,14 @@ namespace Foundry.Agents.Agents.Shared
             return Task.FromResult<string?>(id);
         }
 
+        public Task<string?> RunAgentAsync(string agentId, object payload, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // For local adapter, simulate an assistant by echoing the payload as JSON wrapped in a simple envelope
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(new { agent = agentId, status = "ok", data = payload });
+            _logger.LogInformation("LocalPersistentAgentsClientAdapter: simulated run for {AgentId}", agentId);
+            return Task.FromResult<string?>(json);
+        }
+
         public Task<bool> UpdateAgentOpenApiToolAsync(string agentId, string openApiSpecJson)
         {
             // Local adapter: no-op, pretend success

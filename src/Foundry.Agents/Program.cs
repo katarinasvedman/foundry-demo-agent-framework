@@ -13,6 +13,9 @@ using System.IO;
 using System;
 using Microsoft.ApplicationInsights.Extensibility;
 using Foundry.Agents.Agents.RemoteData;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using System.Diagnostics;
 
 var builder = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration((context, cfg) =>
@@ -57,6 +60,25 @@ var builder = Host.CreateDefaultBuilder(args)
     })
     .ConfigureServices((context, services) =>
     {
+        // Observability: enable OpenTelemetry tracing when requested via env var
+        var enableOtel = (System.Environment.GetEnvironmentVariable("ENABLE_OTEL") ?? "false").Equals("true", System.StringComparison.OrdinalIgnoreCase);
+        var enableSensitive = (System.Environment.GetEnvironmentVariable("ENABLE_SENSITIVE_DATA") ?? "false").Equals("true", System.StringComparison.OrdinalIgnoreCase);
+        // Register a shared ActivitySource for instrumentation
+        var activitySourceName = "Foundry.Agents.Workflows";
+        var activitySource = new ActivitySource(activitySourceName);
+        services.AddSingleton(activitySource);
+
+        if (enableOtel)
+        {
+            services.AddOpenTelemetryTracing(builder =>
+            {
+                builder
+                    .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("Foundry.Agents"))
+                    .AddSource(activitySourceName)
+                    .AddConsoleExporter();
+                // Production: add OTLP or Application Insights exporter here when configured
+            });
+        }
         services.AddSingleton(context.Configuration);
         // Application Insights: register telemetry if a connection string is provided
         var aiConn = context.Configuration["ApplicationInsights:ConnectionString"];
@@ -67,14 +89,20 @@ var builder = Host.CreateDefaultBuilder(args)
                 options.ConnectionString = aiConn;
             });
         }
-        services.AddSingleton<RemoteDataAgent>();
+        //services.AddSingleton<RemoteDataAgent>();
         // Register the new EnergyAgent
-        services.AddSingleton<Foundry.Agents.Agents.Energy.EnergyAgent>();
-        services.AddHttpClient<OpenApiTool>();
-        services.AddSingleton<OpenApiTool>();
+        //services.AddSingleton<Foundry.Agents.Agents.Energy.EnergyAgent>();
+        // Register the new ReportAgent
+        //services.AddSingleton<Foundry.Agents.Agents.Report.ReportAgent>();
+        // Register Compute, Orchestrator and Email assistant
+        //services.AddSingleton<Foundry.Agents.Agents.Compute.ComputeAgent>();
+        services.AddSingleton<Foundry.Agents.Agents.Orchestrator.OrchestratorAgent>();
+        //services.AddSingleton<Foundry.Agents.Agents.EmailAssistant.EmailAssistantAgent>();
+        //services.AddHttpClient<OpenApiTool>();
+        //services.AddSingleton<OpenApiTool>();
 
         // Register LogicAppTool (HttpClient + DefaultAzureCredential)
-        services.AddHttpClient<Foundry.Agents.Tools.LogicApp.LogicAppTool>();
+        /*services.AddHttpClient<Foundry.Agents.Tools.LogicApp.LogicAppTool>();
         services.AddSingleton<Foundry.Agents.Tools.LogicApp.LogicAppTool>(sp =>
         {
             var http = sp.GetRequiredService<System.Net.Http.HttpClient>();
@@ -82,7 +110,7 @@ var builder = Host.CreateDefaultBuilder(args)
             var logger = sp.GetRequiredService<ILogger<Foundry.Agents.Tools.LogicApp.LogicAppTool>>();
             var cred = new DefaultAzureCredential();
             return new Foundry.Agents.Tools.LogicApp.LogicAppTool(http, cred, logger, cfg);
-        });
+        });*/
 
         // register the real adapter using the PROJECT_ENDPOINT from config
         var endpoint = context.Configuration["Project:Endpoint"] ?? throw new InvalidOperationException("Configuration 'Project:Endpoint' is required");

@@ -1,3 +1,6 @@
+# Foundry Demo — persisted AI agents (C#)
+
+This repository is a compact demo that hosts AI "agents" in a .NET app and shows how to persist, update, and orchestrate agents at runtime.
 # Foundry Agents - C# project scaffold
 
 This workspace contains a scaffold for building AI Foundry agents in C#.
@@ -7,7 +10,7 @@ A compact demo that hosts AI "agents" in a .NET app and shows how to persist and
 
 - Energy — produces a JSON "GlobalEnvelope" and a small plot
 - RemoteData — a small data-fetching agent that uses an OpenAPI-backed tool to provide data to other agents
-- EmailAssistant — posts an email request to an Azure Logic App
+- EmailAssistant — posts an email request to an Azure Logic App (invoked via a host-provided LogicAppTool using AAD tokens)
 
 Keep this repo lightweight: agent instructions are stored under `Agents/<Agent>/` (markdown), and runtime artifacts (agent ids, thread mappings) are persisted under `Agents/` and intentionally ignored by git.
 
@@ -19,7 +22,7 @@ Keep this repo lightweight: agent instructions are stored under `Agents/<Agent>/
 ## What this demo shows
 - Create and persist agents so they can be updated in-place (no recreate required)
 - Use a connected-agent pattern for multi-agent orchestration(Energy → RemoteData, EmailAssistant)
-- Use OpenAPI (Azure Function) as tool
+- Use OpenAPI (Azure Function) as tool for RemoteData; EmailAssistant uses the LogicAppTool with AAD tokens
 - Invoke a Logic App, as a tool, securely with AAD tokens from an agent (EmailAssistant)
 
 ## Quick start (local)
@@ -45,8 +48,102 @@ dotnet run
 
 Note the HTTP base URL printed by the function host (usually `http://localhost:7071`). Then, in the same PowerShell session set the `OpenApi:BaseUrl` for the host so the `RemoteData` tool points to your local function:
 
+## Top-level agents in this demo
+
+- Energy — single entry point for the scenario; produces a GlobalEnvelope JSON and small plot outputs
+- RemoteData — data-fetching agent that calls a local OpenAPI-backed tool (ExternalSignals)
+- Compute — a lightweight compute helper used by the Orchestrator
+- Report — simple summarizer that produces a report JSON
+- EmailAssistant — posts a normalized email envelope to an Azure Logic App
+
+Important project layout
+- Host: `src/Foundry.Agents` — the console/worker that creates and runs agents and wires DI
+- Agents: `src/Foundry.Agents/Agents/` (Energy, RemoteData, Compute, Report, EmailAssistant, Orchestrator)
+- Persisted artifacts: `Agents/<Agent>/agent-id.txt` and `Agents/<Agent>/threads.json` (intentionally ignored by git)
+- External tool (local OpenAPI Function): `src/ExternalSignals.Api`
+- Logic App helper: `src/Foundry.Agents/Tools/LogicApp/LogicAppTool.cs`
+
+What’s new / notable
+- Orchestrator: an in-process workflow orchestration (uses the Microsoft.Agents.AI.Workflows preview runtime) that pipes data from `RemoteData` → `Compute` → `Report` and can optionally trigger `EmailAssistant`.
+  - Executor IDs are agent-centric (PascalCase): `RemoteData`, `Compute`, `Report` for traceability.
+  - The Orchestrator builds FunctionExecutor instances at runtime and executes the workflow with InProcessExecution.
+- EmailAssistant: implemented to invoke Azure Logic Apps using `DefaultAzureCredential` and returns a strict JSON envelope ({ status: "ok"|"needs_input"|"error" }).
+
+Requirements and notes
+- .NET SDK: .NET 9 is available in CI here and used for experiments with the Workflows preview; the projects target net9.0 in this branch to support the preview packages. Keep that in mind if your environment only has .NET 8.
+- Workflows preview: this repo experiments with `Microsoft.Agents.AI.Workflows` (preview). The preview API is evolving — the Orchestrator uses FunctionExecutor<object> and IWorkflowContext.YieldOutputAsync to interop with the runtime.
+- Logic Apps & AAD: `EmailAssistant` uses `DefaultAzureCredential` to obtain tokens for audience `https://logic.azure.com/.default`. Locally, run `az login` so DefaultAzureCredential can fetch tokens. Ensure your Logic App is configured to accept AAD tokens (APIM/EasyAuth or an AAD-aware front door) or use a secure alternative.
+
+Quick start (local)
+Prereqs:
+- .NET SDK (9.x recommended for the preview experiments) or at least the SDK versions installed in your dev environment
+- Git
+- (Optional) Azure CLI (`az`) + `az login` for Logic App token testing
+
+1) Start the ExternalSignals API (if you want `RemoteData` to call a local tool):
+
+From the repo root (PowerShell):
+
+```powershell
+cd src/ExternalSignals.Api
+# If this project is an Azure Functions app and you have func tools installed:
+func start
+# Otherwise:
+dotnet run
+```
+
+Note the base URL (e.g. `http://localhost:7071`) and set it in your host session if needed:
+
 ```powershell
 #$env:OpenApi__BaseUrl = 'http://localhost:7071'
+```
+
+2) Build and run the host
+
+From the repo root:
+
+```powershell
+dotnet restore
+dotnet build foundry-demo-take4.sln -c Debug
+dotnet run --project src/Foundry.Agents
+```
+
+3) Run tests
+
+```powershell
+dotnet test tests/Foundry.Agents.Tests/Foundry.Agents.Tests.csproj -c Debug --no-build
+```
+
+Configuration
+- Set these values in `appsettings.Development.json` or environment variables:
+
+```json
+{
+  "Project": {
+    "Endpoint": "https://your-persistent-agents-endpoint",
+    "ModelDeploymentName": "your-model-deployment"
+  },
+  "OpenApi": {
+    "BaseUrl": "http://localhost:7071" // local ExternalSignals.Api
+  },
+  "LogicApp": {
+    "BaseUrl": "https://<region>.logic.azure.com/workflows/<id>/triggers/When_a_HTTP_request_is_received/paths",
+    "InvokePath": "/invoke",
+    "ApiVersion": "2016-10-01"
+  }
+}
+```
+
+Tips and operational notes
+- Persisted artifacts live under `Agents/`. You can edit `Agents/<Agent>/agent-id.txt` to pin an agent id or delete it to force recreation.
+- Large agent instructions are stored as markdown files under `Agents/<Agent>/` and are loaded by the host at runtime — prefer keeping long templates in markdown rather than in code.
+- The Workflows preview used by the Orchestrator is experimental. If you upgrade the preview package, re-check handler signatures (FunctionExecutor and IWorkflowContext) as the preview API may change.
+
+Security reminder
+- Do not commit secrets or credentials. Use environment variables or `appsettings.Development.json` excluded from source control.
+
+Contact / next steps
+- If you want, I can add unit tests that mock `RemoteDataAgent` / `ComputeAgent` / `ReportAgent` and validate the Orchestrator's envelope output. I can also add a small integration script that runs a canned Orchestrator scenario and writes the output to `docs/`.
 ```
 
 Quick start (host)

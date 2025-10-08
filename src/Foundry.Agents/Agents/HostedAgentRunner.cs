@@ -26,7 +26,7 @@ namespace Foundry.Agents.Agents
                 return;
             }
 
-            _logger.LogInformation("HostedAgentRunner starting. Initializing Energy agent (Energy is main, RemoteData attached as connected agent).");
+            _logger.LogInformation("HostedAgentRunner starting. Initializing Energy agent.");
             using var scope = _services.CreateScope();
 
             // Initialize RemoteData first so its persisted id is available for Energy to attach as a connected agent.
@@ -43,7 +43,20 @@ namespace Foundry.Agents.Agents
                 }
             }
 
-            // Initialize EnergyAgent only; it will reference RemoteData as a connected tool if available
+            // Initialize other persisted agents that have initialization logic.
+            var email = scope.ServiceProvider.GetService<Foundry.Agents.Agents.EmailAssistant.EmailAssistantAgent>();
+            if (email != null)
+            {
+                try
+                {
+                    await email.InitializeAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "EmailAssistant initialization failed; proceeding.");
+                }
+            }
+
             var energy = scope.ServiceProvider.GetService<Foundry.Agents.Agents.Energy.EnergyAgent>();
             if (energy != null)
             {
@@ -53,12 +66,33 @@ namespace Foundry.Agents.Agents
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error while running Energy agent");
+                    _logger.LogWarning(ex, "Energy initialization failed; proceeding.");
+                }
+            }
+
+            // (No explicit Energy initialization here; orchestrator/run-time may create or attach as needed.)
+
+            // Run the orchestrator so we exercise the full RemoteData -> Report -> Energy -> Email flow
+            var orchestrator = scope.ServiceProvider.GetService<Foundry.Agents.Agents.Orchestrator.OrchestratorAgent>();
+            if (orchestrator != null)
+            {
+                try
+                {
+                    // Use demo inputs for zone/city/date
+                    var zone = "SE3";
+                    var city = "Stockholm";
+                    var date = System.DateTime.UtcNow.ToString("yyyy-MM-dd");
+                    var json = await orchestrator.RunAsync(zone, city, date);
+                    _logger.LogInformation("Orchestrator run completed. Result: {Result}", json);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error while running orchestrator");
                 }
             }
             else
             {
-                _logger.LogWarning("EnergyAgent not registered.");
+                _logger.LogWarning("OrchestratorAgent not registered.");
             }
 
             // After the agent run completes (or fails), stop the application so the process exits cleanly
