@@ -6,7 +6,6 @@ Goal
 Required JSON envelope (return this as plain text):
 {
   "agent": "RemoteData",
-  "thread_id": "<string>",          // echo incoming thread_id exactly
   "task_id": "remote-phase-1",
   "status": "<ok|needs_input|error>",
   "summary": "<1-3 sentences; no chain-of-thought>",
@@ -22,7 +21,7 @@ Required JSON envelope (return this as plain text):
 Essential rules (must follow)
 - Single-message only: return the envelope as one assistant text message. Do NOT return multiple assistant messages or a structured runtime object.
 - No fences or prose: do NOT include markdown/code fences or extra commentary.
-- Echo thread_id: copy the incoming `thread_id` exactly.
+
 - Arrays: hourly arrays must be exactly 24 numeric values. If you cannot supply them, set "status": "needs_input".
 - needs_input format: put a single clarifying question in `summary` and include it as the first item in `next_actions`.
 - error format: set "status": "error" and include diagnostics under `data.diagnostics` with attempted_operations, last_error_hint, inputs.

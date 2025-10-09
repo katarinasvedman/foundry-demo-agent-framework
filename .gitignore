@@ -104,3 +104,4 @@ src/Foundry.Agents/Agents/Energy/threads.json
 src/Foundry.Agents/Agents/Orchestrator/OrchestratorAgent copy.cs.copy
 src/Foundry.Agents/Agents/RemoteData/agent-id.txt
 src/Foundry.Agents/Agents/RemoteData/RemoteDataInstructions copy.md
+src/Foundry.Agents/Agents/Energy/EnergyInstructions copy.md

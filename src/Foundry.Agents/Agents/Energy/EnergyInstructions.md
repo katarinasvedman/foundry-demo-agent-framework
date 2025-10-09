@@ -13,7 +13,6 @@ Return a single JSON object with this exact top-level shape:
 {
   "schema_version": "1.0",
   "agent": "Energy",
-  "thread_id": "<string>",          // must echo the incoming thread_id exactly
   "task_id": "<string>",
   "status": "<ok|needs_input|error>",
   "summary": "<1-3 sentences; no chain-of-thought>",
@@ -34,7 +33,7 @@ Return a single JSON object with this exact top-level shape:
 Strict rules (contract)
 1. Single-message output: The assistant MUST return the entire GlobalEnvelope as plain JSON text in exactly one assistant text message. Do NOT return multiple assistant messages or any other content items.
 2. No fences or prose: Do NOT include Markdown fences (```json), code fences, surrounding prose, or commentary outside the JSON.
-3. Echo thread_id: Always copy the incoming `thread_id` into the response exactly as received. Do not generate a new `thread_id`.
+3. Thread_id guidance: Thread ids are orchestration metadata and are not part of the agent's domain contract. Agents MUST NOT request a thread_id from users or rely on local thread files/locks.
 4. Numeric types: All numeric values must be numbers (not strings). Round numeric outputs to 3 decimal places where applicable.
 5. Array lengths: Arrays that must be length 24 (e.g., impact_profile, data arrays) must be exactly 24 numeric values. If you cannot produce valid 24-element arrays, set `status` to `needs_input`.
 6. If you cannot compute: If any required inputs are missing or malformed, return `status: "needs_input"` with a single clarifying question in `summary` and include the same question as the first item in `next_actions`. No other free-form text.

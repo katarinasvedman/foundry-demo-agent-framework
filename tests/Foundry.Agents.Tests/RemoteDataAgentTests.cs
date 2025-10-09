@@ -11,17 +11,7 @@ namespace Foundry.Agents.Tests
 {
     public class RemoteDataAgentTests
     {
-        [Fact]
-        public async Task InitializeAsync_Skips_WhenConfigurationMissing()
-        {
-            var logger = Mock.Of<ILogger<RemoteDataAgent>>();
-            var inMemory = new ConfigurationBuilder().Build();
-            var agent = new RemoteDataAgent(logger, inMemory);
-
-            // No exceptions should be thrown when missing config
-            await agent.InitializeAsync(CancellationToken.None);
-        }
-
+        // InitializeAsync removed from RemoteDataAgent — initialization is handled by the orchestrator.
         [Fact]
         public void Instructions_File_NotFound_ReturnsEmpty()
         {

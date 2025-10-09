@@ -26,64 +26,22 @@ namespace Foundry.Agents.Agents
                 return;
             }
 
-            _logger.LogInformation("HostedAgentRunner starting. Initializing Energy agent.");
+            _logger.LogInformation("HostedAgentRunner starting. Initializing only Orchestrator agent.");
             using var scope = _services.CreateScope();
 
-            // Initialize RemoteData first so its persisted id is available for Energy to attach as a connected agent.
-            var remote = scope.ServiceProvider.GetService<Foundry.Agents.Agents.RemoteData.RemoteDataAgent>();
-            if (remote != null)
-            {
-                try
-                {
-                    await remote.InitializeAsync(cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "RemoteData initialization failed; proceeding to Energy initialization anyway.");
-                }
-            }
-
-            // Initialize other persisted agents that have initialization logic.
-            var email = scope.ServiceProvider.GetService<Foundry.Agents.Agents.EmailAssistant.EmailAssistantAgent>();
-            if (email != null)
-            {
-                try
-                {
-                    await email.InitializeAsync();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "EmailAssistant initialization failed; proceeding.");
-                }
-            }
-
-            var energy = scope.ServiceProvider.GetService<Foundry.Agents.Agents.Energy.EnergyAgent>();
-            if (energy != null)
-            {
-                try
-                {
-                    await energy.InitializeAsync();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Energy initialization failed; proceeding.");
-                }
-            }
-
-            // (No explicit Energy initialization here; orchestrator/run-time may create or attach as needed.)
-
-            // Run the orchestrator so we exercise the full RemoteData -> Report -> Energy -> Email flow
+            // Only the OrchestratorAgent runs in-process. All other agents are persisted assistants
+            // managed by the Foundry Persistent Agents service and will be created/queried by the orchestrator.
             var orchestrator = scope.ServiceProvider.GetService<Foundry.Agents.Agents.Orchestrator.OrchestratorAgent>();
             if (orchestrator != null)
             {
                 try
                 {
                     // Use demo inputs for zone/city/date
-                    var zone = "SE3";
-                    var city = "Stockholm";
-                    var date = System.DateTime.UtcNow.ToString("yyyy-MM-dd");
-                    var json = await orchestrator.RunAsync(zone, city, date);
-                    _logger.LogInformation("Orchestrator run completed. Result: {Result}", json);
+                        var zone = "SE3";
+                        var city = "Stockholm";
+                        var date = System.DateTime.UtcNow.ToString("yyyy-MM-dd");
+                        var json = await orchestrator.RunAsync(zone, city, date);
+                        _logger.LogInformation("Orchestrator run completed. Result: {Result}", json);
                 }
                 catch (Exception ex)
                 {

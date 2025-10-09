@@ -5,6 +5,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Azure.AI.Agents.Persistent;
 using Azure.Identity;
+using Azure;
+using System.Threading;
+using Microsoft.Agents.AI;
 using Foundry.Agents.Agents.Shared;
 
 namespace Foundry.Agents.Agents.EmailAssistant
@@ -13,107 +16,19 @@ namespace Foundry.Agents.Agents.EmailAssistant
     {
         private readonly ILogger<EmailAssistantAgent> _logger;
         private readonly IConfiguration _configuration;
-    private readonly IPersistentAgentsClientAdapter _adapter;
     private readonly Foundry.Agents.Tools.LogicApp.LogicAppTool? _logicAppTool;
 
-        public EmailAssistantAgent(ILogger<EmailAssistantAgent> logger, IConfiguration configuration)
-            : this(logger, configuration, null)
-        {
-        }
-
-        public EmailAssistantAgent(ILogger<EmailAssistantAgent> logger, IConfiguration configuration, IPersistentAgentsClientAdapter? adapter, Foundry.Agents.Tools.LogicApp.LogicAppTool? logicAppTool = null)
+        public EmailAssistantAgent(ILogger<EmailAssistantAgent> logger, IConfiguration configuration, Foundry.Agents.Tools.LogicApp.LogicAppTool? logicAppTool = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-            _adapter = adapter!; // may be null for InitializeAsync and created lazily
             _logicAppTool = logicAppTool;
         }
 
         // Read per-agent instructions via InstructionReader
         public string Instructions => InstructionReader.ReadSection("EmailAssistant");
 
-    public async Task InitializeAsync()
-        {
-            _logger.LogInformation("EmailAssistantAgent initializing using persistent agents adapter.");
-
-            var endpoint = Environment.GetEnvironmentVariable("PROJECT_ENDPOINT") ?? _configuration["Project:Endpoint"];
-            var modelDeploymentName = Environment.GetEnvironmentVariable("MODEL_DEPLOYMENT_NAME") ?? _configuration["Project:ModelDeploymentName"];
-
-            if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(modelDeploymentName))
-            {
-                _logger.LogWarning("PROJECT_ENDPOINT or MODEL_DEPLOYMENT_NAME not configured. Skipping EmailAssistant initialization.");
-                return;
-            }
-
-            try
-            {
-                IPersistentAgentsClientAdapter adapter = _adapter ?? new Shared.RealPersistentAgentsClientAdapter(endpoint, _configuration, null);
-
-                var persistedAgentId = await AgentFileHelpers.ReadPersistedAgentIdAsync(_configuration, "EmailAssistant", _logger);
-                if (!string.IsNullOrEmpty(persistedAgentId))
-                {
-                    _logger.LogInformation("Found persisted agent id {AgentId} for EmailAssistant; verifying", persistedAgentId);
-                    try
-                    {
-                        if (await adapter.AgentExistsAsync(persistedAgentId))
-                        {
-                            _logger.LogInformation("Persisted agent {AgentId} exists. Reusing.", persistedAgentId);
-                            return;
-                        }
-
-                        _logger.LogWarning("Persisted agent id {AgentId} not found on server; will create a new agent.", persistedAgentId);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Error while verifying persisted agent id {AgentId}; will attempt creation.", persistedAgentId);
-                    }
-                }
-
-                var providedAgentId = Environment.GetEnvironmentVariable("PROJECT_AGENT_ID") ?? _configuration["Project:AgentId"];
-                // If no env/config provided id, fallback to the persisted file for EmailAssistant
-                if (string.IsNullOrEmpty(providedAgentId))
-                {
-                    var persisted = await AgentFileHelpers.ReadPersistedAgentIdAsync(_configuration, "EmailAssistant", _logger);
-                    if (!string.IsNullOrEmpty(persisted)) providedAgentId = persisted;
-                }
-                if (!string.IsNullOrEmpty(providedAgentId))
-                {
-                    _logger.LogInformation("Verifying provided agent id {AgentId}", providedAgentId);
-                    if (await adapter.AgentExistsAsync(providedAgentId))
-                    {
-                        _logger.LogInformation("Agent {AgentId} exists.", providedAgentId);
-                        await AgentFileHelpers.PersistAgentIdAsync(providedAgentId, _configuration, _logger, "EmailAssistant");
-                        return;
-                    }
-
-                    _logger.LogWarning("Provided agent id {AgentId} not found; will create a new agent.", providedAgentId);
-                }
-
-                var instructions = Instructions;
-                if (string.IsNullOrWhiteSpace(instructions))
-                {
-                    // Minimal inline fallback if the file is missing
-                    instructions = "You are EmailAssistantAgent. Draft and send concise emails via an OpenAPI/HTTP Logic App connector. Accept email_to, email_subject, email_body. Return a JSON envelope with status ok|needs_input|error.";
-                }
-
-                // EmailAssistant is implemented to invoke Azure Logic Apps via a host-provided LogicAppTool
-                // and does not require attaching an OpenAPI tool to the persisted agent.
-                var newAgentId = await adapter.CreateAgentAsync(modelDeploymentName, "EmailAssistantAgent", instructions, Array.Empty<string>());
-                if (!string.IsNullOrEmpty(newAgentId))
-                {
-                    _logger.LogInformation("Created EmailAssistantAgent with id {AgentId}", newAgentId);
-                    await AgentFileHelpers.PersistAgentIdAsync(newAgentId, _configuration, _logger, "EmailAssistant");
-                }
-                else
-                {
-                    _logger.LogError("CreateAgentAsync returned null or empty id for EmailAssistantAgent.");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error while initializing EmailAssistantAgent");
-            }
-        }
+    // Initialization moved to the orchestrator and persisted agent creation flow. EmailAssistantAgent no longer exposes InitializeAsync.
 
         // Run the EmailAssistant flow: accepts a flexible input shape, normalizes recipients,
         // calls the configured OpenAPI/LogicApp endpoint and returns the strict JSON envelope.
@@ -191,6 +106,97 @@ namespace Foundry.Agents.Agents.EmailAssistant
             {
                 _logger.LogError(ex, "Unexpected error in EmailAssistant.RunAsync");
                 return BuildEnvelope(status: "error", summary: "Unexpected internal error.", data: new { error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Ensure a persisted AIAgent exists for EmailAssistant on the provided endpoint. Mirrors RemoteData.GetOrCreateAIAgentAsync.
+        /// </summary>
+    public static async Task<AIAgent?> GetOrCreateAIAgentAsync(string endpoint, IConfiguration configuration, ILogger logger, IPersistentAgentsClientAdapter? adapter = null, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var client = new Azure.AI.Agents.Persistent.PersistentAgentsClient(endpoint, new Azure.Identity.DefaultAzureCredential());
+
+                var persistedAgentId = await AgentFileHelpers.ReadPersistedAgentIdAsync(configuration, "EmailAssistant", logger);
+                if (!string.IsNullOrWhiteSpace(persistedAgentId))
+                {
+                    try
+                    {
+                        var agent = await client.GetAIAgentAsync(persistedAgentId, cancellationToken: cancellationToken);
+                        if (agent != null)
+                        {
+                            logger.LogInformation("Found persisted EmailAssistant agent {AgentId} on server; reusing.", persistedAgentId);
+                            return agent;
+                        }
+                    }
+                    catch (RequestFailedException rf) when (rf.Status == 404)
+                    {
+                        logger.LogWarning("Persisted EmailAssistant agent id {AgentId} not found (404); will attempt creation.", persistedAgentId);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Error while verifying persisted agent id {AgentId}; will attempt creation.", persistedAgentId);
+                    }
+                }
+
+                var providedAgentId = Environment.GetEnvironmentVariable("EMAIL_AGENT_ID") ?? configuration["Project:EmailAgentId"];
+                if (!string.IsNullOrWhiteSpace(providedAgentId))
+                {
+                    try
+                    {
+                        var agent = await client.GetAIAgentAsync(providedAgentId, cancellationToken: cancellationToken);
+                        if (agent != null)
+                        {
+                            logger.LogInformation("Using provided EmailAssistant agent id {AgentId} and persisting locally.", providedAgentId);
+                            await AgentFileHelpers.PersistAgentIdAsync(providedAgentId, configuration, logger, "EmailAssistant");
+                            return agent;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Error while verifying provided email agent id {AgentId}; will attempt creation.", providedAgentId);
+                    }
+                }
+
+                var modelDeploymentName = Environment.GetEnvironmentVariable("MODEL_DEPLOYMENT_NAME") ?? configuration["Project:ModelDeploymentName"];
+                if (string.IsNullOrWhiteSpace(modelDeploymentName))
+                {
+                    logger.LogWarning("MODEL_DEPLOYMENT_NAME/Project:ModelDeploymentName not configured; cannot create Email assistant agent.");
+                    return null;
+                }
+
+                var instructionsFromFile = InstructionReader.ReadSection("EmailAssistant");
+                var instructions = !string.IsNullOrWhiteSpace(instructionsFromFile) ? instructionsFromFile : string.Empty;
+
+                var createName = "EmailAssistantAgentAF";
+
+                var realAdapter = adapter ?? new Foundry.Agents.Agents.Shared.RealPersistentAgentsClientAdapter(endpoint, configuration, null);
+                var newAgentId = await realAdapter.CreateAgentAsync(modelDeploymentName, createName, instructions, new[] { "openapi" });
+                if (string.IsNullOrWhiteSpace(newAgentId))
+                {
+                    logger.LogError("EmailAssistant agent creation returned null or empty id.");
+                    return null;
+                }
+
+                logger.LogInformation("Created EmailAssistant agent with id {AgentId}; persisting locally.", newAgentId);
+                await AgentFileHelpers.PersistAgentIdAsync(newAgentId, configuration, logger, "EmailAssistant");
+
+                try
+                {
+                    var createdAgent = await client.GetAIAgentAsync(newAgentId, cancellationToken: cancellationToken);
+                    return createdAgent;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "EmailAssistant agent created ({AgentId}) but failed to fetch AIAgent object.", newAgentId);
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed while getting or creating EmailAssistant agent.");
+                return null;
             }
         }
 
@@ -330,7 +336,7 @@ namespace Foundry.Agents.Agents.EmailAssistant
             var envelope = new
             {
                 agent = "EmailAssistantAgent",
-                thread_id = "<string>",
+                thread_id = string.Empty,
                 task_id = Guid.NewGuid().ToString(),
                 status = status,
                 summary = summary,
