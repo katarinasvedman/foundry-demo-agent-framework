@@ -29,9 +29,10 @@ namespace Foundry.Agents.Agents.Orchestrator
             // Create a PersistentAgentsClient for the provided endpoint. When PROJECT_ENDPOINT is https, DefaultAzureCredential will be used.
             var persistentAgentsClient = new Azure.AI.Agents.Persistent.PersistentAgentsClient(endpoint, new Azure.Identity.DefaultAzureCredential());
 
-            // Agent ids (explicitly using known demo ids). Prefer env override.
-            var remoteDataAgentId = System.Environment.GetEnvironmentVariable("REMOTE_DATA_AGENT_ID") ?? "asst_dMBVMGkg3nbkoarVWsRJNcxV";
-            var energyAgentId = System.Environment.GetEnvironmentVariable("ENERGY_AGENT_ID") ?? "asst_WKrLKVRE5G1WEy6XPzWwG1ls";
+            // Prefer persisted local agent ids (Agents/<Agent>/agent-id.txt). The
+            // GetOrCreateAIAgentAsync helper (used below) already reads persisted
+            // agent ids first using AgentFileHelpers.ReadPersistedAgentIdAsync, so
+            // there's no need to read environment variables here.
 
             // Ensure the RemoteData agent exists on the target persistent agents service. Create if missing.
             AIAgent? remoteData = await Foundry.Agents.Agents.RemoteData.RemoteDataAgent.GetOrCreateAIAgentAsync(endpoint, _configuration, _logger);

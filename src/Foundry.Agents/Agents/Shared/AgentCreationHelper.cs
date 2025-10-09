@@ -43,8 +43,10 @@ namespace Foundry.Agents.Agents.Shared
                     }
                 }
 
-                var envKey = agentName.ToUpperInvariant() + "_AGENT_ID";
-                var providedAgentId = Environment.GetEnvironmentVariable(envKey) ?? configuration[$"Project:{agentName}AgentId"];
+                // Do not prefer environment variables for agent ids. If a provided agent id
+                // is set in configuration (for example via appsettings), honor it; otherwise
+                // rely on persisted agent-id.txt or create a new agent.
+                var providedAgentId = configuration[$"Project:{agentName}AgentId"];
                 if (!string.IsNullOrWhiteSpace(providedAgentId))
                 {
                     try

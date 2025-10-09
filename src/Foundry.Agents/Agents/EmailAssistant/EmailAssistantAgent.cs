@@ -140,7 +140,8 @@ namespace Foundry.Agents.Agents.EmailAssistant
                     }
                 }
 
-                var providedAgentId = Environment.GetEnvironmentVariable("EMAIL_AGENT_ID") ?? configuration["Project:EmailAgentId"];
+                // Prefer persisted agent id or configuration over environment variables.
+                var providedAgentId = configuration["Project:EmailAgentId"];
                 if (!string.IsNullOrWhiteSpace(providedAgentId))
                 {
                     try
