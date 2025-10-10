@@ -1,0 +1,153 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "email_to": {
+                "type": "string"
+              },
+              "email_subject": {
+                "type": "string"
+              },
+              "email_body": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "filename": {
+                      "type": "string"
+                    },
+                    "content_base64": {
+                      "type": "string"
+                    },
+                    "content_type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "filename",
+                    "content_base64"
+                  ]
+                }
+              },
+              "data": {
+                "type": "object"
+              },
+              "arguments": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "ParseArguments": {
+        "runAfter": {},
+        "type": "Compose",
+        "inputs": "@if(equals(empty(triggerBody()?['arguments']), false), json(triggerBody()?['arguments']), triggerBody())"
+      },
+      "SelectAttachments": {
+        "runAfter": {
+          "ParseArguments": [
+            "Succeeded"
+          ]
+        },
+        "type": "Select",
+        "inputs": {
+          "from": "@coalesce(body('ParseArguments')?['attachments'], body('ParseArguments')?['data']?['attachments'], triggerBody()?['attachments'], triggerBody()?['data']?['attachments'], json('[]'))",
+          "select": {
+            "Name": "@item()?['filename']",
+            "ContentBytes": "@item()?['content_base64']",
+            "ContentType": "@item()?['content_type']"
+          }
+        }
+      },
+      "ComposeTo": {
+        "runAfter": {
+          "SelectAttachments": [
+            "Succeeded"
+          ]
+        },
+        "type": "Compose",
+        "inputs": "@coalesce(body('ParseArguments')?['email_to'], body('ParseArguments')?['data']?['email_to'], triggerBody()?['email_to'], triggerBody()?['data']?['email_to'])"
+      },
+      "Send_an_email": {
+        "runAfter": {
+          "ComposeTo": [
+            "Succeeded"
+          ]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365_']['connectionId']"
+            }
+          },
+          "method": "post",
+          "path": "/v2/Mail",
+          "body": {
+            "To": "@if(isArray(body('ComposeTo')), join(body('ComposeTo'), ','), body('ComposeTo'))",
+            "Subject": "@coalesce(body('ParseArguments')?['email_subject'], body('ParseArguments')?['data']?['email_subject'], triggerBody()?['email_subject'], triggerBody()?['data']?['email_subject'])",
+            "Body": "<p class=\"editor-paragraph\">@{coalesce(body('ParseArguments')?['email_body'], body('ParseArguments')?['data']?['email_body'], triggerBody()?['email_body'], triggerBody()?['data']?['email_body'])}</p>",
+            "Importance": "Normal",
+            "Attachments": "@body('SelectAttachments')"
+          }
+        }
+      },
+      "Response": {
+        "runAfter": {
+          "Send_an_email": [
+            "Succeeded"
+          ]
+        },
+        "type": "Response",
+        "kind": "Http",
+        "inputs": {
+          "statusCode": 200,
+          "body": {
+            "ok": true,
+            "parseMethod": "@if(equals(empty(triggerBody()?['arguments']), false), 'arguments-string', 'direct-body')",
+            "attachments_path_checked": [
+              "body('ParseArguments')?['attachments']",
+              "body('ParseArguments')?['data']?['attachments']",
+              "triggerBody()?['attachments']",
+              "triggerBody()?['data']?['attachments']"
+            ],
+            "attachments_received": "@length(coalesce(body('ParseArguments')?['attachments'], body('ParseArguments')?['data']?['attachments'], triggerBody()?['attachments'], triggerBody()?['data']?['attachments'], json('[]')))",
+            "attachments_sent": "@length(body('SelectAttachments'))"
+          }
+        }
+      }
+    },
+    "outputs": {},
+    "parameters": {
+      "$connections": {
+        "type": "Object",
+        "defaultValue": {}
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "type": "Object",
+      "value": {
+        "office365_": {
+          "id": "/subscriptions/4af326ce-fa13-4b32-8c36-6fb8963741c0/providers/Microsoft.Web/locations/swedencentral/managedApis/office365",
+          "connectionId": "/subscriptions/4af326ce-fa13-4b32-8c36-6fb8963741c0/resourceGroups/rg-kapeltol-6234/providers/Microsoft.Web/connections/office365"
+        }
+      }
+    }
+  }
+}

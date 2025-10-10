@@ -98,23 +98,21 @@ namespace Foundry.Agents.Agents.Shared
                     _logger.LogWarning(ex, "Failed to read OpenAPI spec");
                 }
 
-                // Build tools list
+                // Build tools list based on requested toolTypes only (empty set means attach none)
                 var tools = new List<ToolDefinition>();
-                // Normalize toolTypes to a set for lookups
                 var requested = toolTypes != null ? new HashSet<string>(toolTypes, StringComparer.OrdinalIgnoreCase) : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                // Attach OpenAPI tool if requested and specData is available
-                if ((requested.Count == 0 || requested.Contains("openapi")) && specData != null)
+                // Attach OpenAPI tool if explicitly requested and specData is available
+                if (requested.Contains("openapi") && specData != null)
                 {
                     var openApiAuth = new OpenApiAnonymousAuthDetails();
                     var openApiTool = new OpenApiToolDefinition("external_signals", "Fetch SE3 prices & Stockholm weather (24h)", specData!, openApiAuth, new List<string>());
                     tools.Add(openApiTool);
                 }
 
-                // Attach Code Interpreter tool if requested
-                if (requested.Count == 0 || requested.Contains("code_interpreter") || requested.Contains("code-interpreter") || requested.Contains("interpreter"))
+                // Attach Code Interpreter tool if explicitly requested
+                if (requested.Contains("code_interpreter") || requested.Contains("code-interpreter") || requested.Contains("interpreter"))
                 {
-                    // Create a CodeInterpreterToolDefinition using the SDK type. Use defaults as no special payload is required for basic usage.
                     try
                     {
                         var codeTool = new CodeInterpreterToolDefinition();
@@ -123,6 +121,39 @@ namespace Foundry.Agents.Agents.Shared
                     catch (Exception ex)
                     {
                         _logger.LogWarning(ex, "CodeInterpreterToolDefinition not available in SDK or failed to construct; skipping code interpreter tool registration");
+                    }
+                }
+
+                // Attach Logic App tool if explicitly requested. Expect a separate OpenAPI spec path in configuration: OpenApi:LogicAppSpecPath
+                if (requested.Contains("logicapp"))
+                {
+                    try
+                    {
+                        var logicSpecPath = _configuration["OpenApi:LogicAppSpecPath"];
+                        if (string.IsNullOrWhiteSpace(logicSpecPath))
+                        {
+                            // Fallback to bundled logic app spec file
+                            logicSpecPath = Path.Combine("Tools", "OpenApi", "logicapp_apispec.json");
+                        }
+
+                        var fullPath = logicSpecPath;
+                        if (!Path.IsPathRooted(fullPath)) fullPath = Path.Combine(AppContext.BaseDirectory, logicSpecPath);
+                        if (File.Exists(fullPath))
+                        {
+                            var logicSpecJson = await File.ReadAllTextAsync(fullPath);
+                            var logicSpecData = BinaryData.FromString(logicSpecJson);
+                            var logicAuth = new OpenApiAnonymousAuthDetails();
+                            var logicTool = new OpenApiToolDefinition("logicapp", "Logic App Email Sender Connector", logicSpecData, logicAuth, new List<string>());
+                            tools.Add(logicTool);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Logic App OpenAPI spec not found at {SpecPath}; skipping LogicApp tool attachment.", fullPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to attach LogicApp tool");
                     }
                 }
 

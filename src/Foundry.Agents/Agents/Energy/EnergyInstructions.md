@@ -40,8 +40,10 @@ Strict rules (contract)
 7. Errors: On unrecoverable failures (tool error, code interpreter failure after retry), return `status: "error"` and include a short diagnostic in `summary` and structured diagnostics under `data.diagnostics` (keys: attempted_operations, last_error_hint, inputs).
 8. Determinism: Where applicable (e.g., randomized operations in the CI cell), ensure determinism (seed RNG) so outputs are reproducible.
 
-Input expectations (from caller)
+- Input expectations (from caller)
 - Preferred caller behavior: supply RemoteData as a single assistant text message containing the RemoteData JSON envelope (plain JSON text). Callers SHOULD NOT forward structured runtime objects that may be split into multiple content items.
+-
+- If callers include a verbatim `user_request` field in the run input (for example: { "user_request": "Send the summary to alice@example.com with subject 'Daily energy'" }), the Energy agent MUST NOT alter that string. The Energy agent SHOULD include that exact `user_request` value as a top-level field in its returned GlobalEnvelope so downstream agents (notably EmailAssistant) can access the original high-level ask for composing emails or attachments.
 - Required inputs for computation:
   - data.day_ahead_price_sek_per_kwh: array of exactly 24 numeric values
   - data.temperature_c: array of exactly 24 numeric values
@@ -155,17 +157,6 @@ Examples
   "next_actions": [],
   "citations": []
 }
-
-Integrator notes (caller obligations)
-- Callers (e.g., Orchestrator) should pass RemoteData results as a single assistant text message containing the RemoteData JSON envelope as plain text. This prevents the Persistent Agents SDK from splitting the payload into many content items.
-- Callers that instead post structured objects risk causing the SDK to create a large messages[0].content array which may hit service limits (array_above_max_length).
-- If using the Workflow system, consider adding a small transform node to convert structured objects into a single JSON string before forwarding, or prefer direct adapter invocations (imperative runs) when reliability is critical.
-
-Testing checklist
-1. Ensure the persisted Energy agent has these instructions (recreate/re-init agent if necessary).
-2. Trigger an end-to-end run where RemoteData is returned as a single JSON text message.
-3. Confirm the Energy agent receives parsed data and that the CI cell runs once (retry once upon CI error).
-4. Confirm the assistant produced exactly one assistant text message containing the GlobalEnvelope JSON that parses cleanly.
 
 Change history / contact
 - If you change the envelope schema, increment `schema_version` so callers can adapt robustly.

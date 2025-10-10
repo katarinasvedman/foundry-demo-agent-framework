@@ -15,7 +15,7 @@ namespace Foundry.Agents.Agents.Shared
         /// <summary>
         /// Generic helper to get or create a persisted AIAgent. Returns the AIAgent or null on failure.
         /// </summary>
-        public static async Task<AIAgent?> GetOrCreateAsync(string endpoint, IConfiguration configuration, ILogger logger, string agentName, string createName, Func<string>? readInstructions = null, IPersistentAgentsClientAdapter? adapter = null, CancellationToken cancellationToken = default)
+    public static async Task<AIAgent?> GetOrCreateAsync(string endpoint, IConfiguration configuration, ILogger logger, string agentName, string createName, Func<string>? readInstructions = null, IPersistentAgentsClientAdapter? adapter = null, IEnumerable<string>? toolTypes = null, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -75,7 +75,8 @@ namespace Foundry.Agents.Agents.Shared
                 var instructions = readInstructions != null ? readInstructions() ?? string.Empty : string.Empty;
 
                 var realAdapter = adapter ?? new RealPersistentAgentsClientAdapter(endpoint, configuration, null);
-                var newAgentId = await realAdapter.CreateAgentAsync(modelDeploymentName, createName, instructions, new[] { "openapi" });
+                var desiredTools = toolTypes ?? new[] { "openapi" };
+                var newAgentId = await realAdapter.CreateAgentAsync(modelDeploymentName, createName, instructions, desiredTools);
                 if (string.IsNullOrWhiteSpace(newAgentId))
                 {
                     logger.LogError("{AgentName} agent creation returned null or empty id.", agentName);

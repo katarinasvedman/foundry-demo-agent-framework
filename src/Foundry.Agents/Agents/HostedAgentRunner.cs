@@ -37,10 +37,12 @@ namespace Foundry.Agents.Agents
                 try
                 {
                     // Use demo inputs for zone/city/date
-                        var zone = "SE3";
-                        var city = "Stockholm";
-                        var date = System.DateTime.UtcNow.ToString("yyyy-MM-dd");
-                        var json = await orchestrator.RunAsync(zone, city, date);
+                        var zone = Environment.GetEnvironmentVariable("TEST_ZONE") ?? "SE3";
+                            var city = Environment.GetEnvironmentVariable("TEST_CITY") ?? "Stockholm";
+                            var date = Environment.GetEnvironmentVariable("TEST_DATE") ?? "2025-10-01";
+                            // Allow overriding the user request for testing via TEST_USER_REQUEST env var
+                            var testRequest = System.Environment.GetEnvironmentVariable("TEST_USER_REQUEST") ?? "Compute a deterministic baseline and three energy-saving measures for zone SE3 in Stockholm on 2025-10-01. Send the summary by email to kapeltol@microsoft.com";
+                            var json = await orchestrator.RunAsync(zone, city, date, testRequest);
                         _logger.LogInformation("Orchestrator run completed. Result: {Result}", json);
                 }
                 catch (Exception ex)

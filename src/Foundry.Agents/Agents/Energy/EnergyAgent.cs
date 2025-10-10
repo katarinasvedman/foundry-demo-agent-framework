@@ -40,7 +40,8 @@ namespace Foundry.Agents.Agents.Energy
         /// </summary>
         public static Task<AIAgent?> GetOrCreateAIAgentAsync(string endpoint, IConfiguration configuration, ILogger logger, IPersistentAgentsClientAdapter? adapter = null, CancellationToken cancellationToken = default)
         {
-            return AgentCreationHelper.GetOrCreateAsync(endpoint, configuration, logger, "Energy", "EnergyAgentAFX", () => InstructionReader.ReadSection("Energy"), adapter, cancellationToken);
+            // Energy agent should not have any tools attached
+            return AgentCreationHelper.GetOrCreateAsync(endpoint, configuration, logger, "Energy", "EnergyAgentAFX", () => InstructionReader.ReadSection("Energy"), adapter, new[] { "code_interpreter" }, cancellationToken);
         }
     }
 }

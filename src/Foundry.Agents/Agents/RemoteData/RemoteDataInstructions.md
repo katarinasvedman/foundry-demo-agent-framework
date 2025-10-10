@@ -18,6 +18,8 @@ Required JSON envelope (return this as plain text):
   "citations": []
 }
 
+Note: Callers (like Orchestrator) may include a verbatim `user_request` field in the run input/payload. If present, RemoteData MUST NOT modify this field and SHOULD echo it back exactly in the returned envelope (add top-level "user_request": "<original string>"), so that downstream agents (e.g., Energy or EmailAssistant) can access the original high-level ask.
+
 Essential rules (must follow)
 - Single-message only: return the envelope as one assistant text message. Do NOT return multiple assistant messages or a structured runtime object.
 - No fences or prose: do NOT include markdown/code fences or extra commentary.

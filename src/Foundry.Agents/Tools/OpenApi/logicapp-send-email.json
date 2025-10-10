@@ -1,0 +1,53 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Logic App Send Email API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/send": {
+      "post": {
+        "operationId": "SendEmail",
+        "summary": "Send email via Logic App trigger",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email_to": { "type": "string" },
+                  "email_subject": { "type": "string" },
+                  "email_body": { "type": "string" },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "filename": { "type": "string" },
+                        "content_base64": { "type": "string" },
+                        "content_type": { "type": "string" }
+                      },
+                      "required": ["filename", "content_base64"]
+                    }
+                  }
+                },
+                "required": ["email_to", "email_subject", "email_body"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

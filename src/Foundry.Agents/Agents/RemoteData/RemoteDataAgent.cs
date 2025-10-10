@@ -39,7 +39,8 @@ namespace Foundry.Agents.Agents.RemoteData
         /// </summary>
         public static Task<AIAgent?> GetOrCreateAIAgentAsync(string endpoint, IConfiguration configuration, ILogger logger, IPersistentAgentsClientAdapter? adapter = null, CancellationToken cancellationToken = default)
         {
-            return AgentCreationHelper.GetOrCreateAsync(endpoint, configuration, logger, "RemoteData", "RemoteDataAgentAFX", () => InstructionReader.ReadSection("RemoteData"), adapter, cancellationToken);
+            // RemoteData requires the OpenAPI tool to fetch external signals
+            return AgentCreationHelper.GetOrCreateAsync(endpoint, configuration, logger, "RemoteData", "RemoteDataAgentAFX", () => InstructionReader.ReadSection("RemoteData"), adapter, new[] { "openapi" }, cancellationToken);
         }
     }
 }
